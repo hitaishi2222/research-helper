@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "research-helper"
+name = "rh-cli"
 version = "0.1.0"
 description = "rh — orchestrate an AI research project end to end from the terminal"
 readme = "README.md"

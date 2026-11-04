@@ -34,8 +34,8 @@ A research project should be reproducible from its files alone:
 
 ## v0.2 — Distribution & skill 🚧
 
-- [ ] publish `research-helper` to PyPI (trusted publishing workflow)
-- [ ] `uv tool install research-helper` verified on a clean machine
+- [ ] publish `rh-cli` to PyPI (trusted publishing workflow)
+- [ ] `uv tool install rh-cli` verified on a clean machine
 - [x] bundle the skill in the wheel
 - [x] `rh skill install` → `~/.agents/skills/research-helper/`
 - [ ] add `rh skill install --dest ~/.pi/agent/skills/...` docs to the skill itself

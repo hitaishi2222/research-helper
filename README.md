@@ -3,8 +3,8 @@
 **`rh` — orchestrate an AI research project end to end from the terminal.**
 
 [![CI](https://github.com/hitaishi2222/research-helper/actions/workflows/ci.yml/badge.svg)](https://github.com/hitaishi2222/research-helper/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/research-helper.svg)](https://pypi.org/project/research-helper/)
-[![Python](https://img.shields.io/pypi/pyversions/research-helper.svg)](https://pypi.org/project/research-helper/)
+[![PyPI](https://img.shields.io/pypi/v/rh-cli.svg)](https://pypi.org/project/rh-cli/)
+[![Python](https://img.shields.io/pypi/pyversions/rh-cli.svg)](https://pypi.org/project/rh-cli/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 `rh` turns a research idea into a gated pipeline — config → intake → environment →
@@ -20,8 +20,8 @@ gates. Install the CLI, then optionally install the skill globally.
 ## Install
 
 ```bash
-# once published to PyPI
-uv tool install research-helper
+# once published to PyPI (distribution name: rh-cli, command: rh)
+uv tool install rh-cli
 
 # or straight from git
 uv tool install git+https://github.com/hitaishi2222/research-helper
@@ -32,7 +32,7 @@ cd research-helper
 uv tool install .
 ```
 
-`pipx install research-helper` and `pip install --user research-helper` work too.
+`pipx install rh-cli` and `pip install --user rh-cli` work too.
 Verify with:
 
 ```bash

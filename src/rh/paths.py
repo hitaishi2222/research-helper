@@ -1,6 +1,6 @@
 """Project root discovery + .rh/ layout.
 
-Priority: explicit --root, RH_ROOT, cwd walk-up for `.rh/` or ENV.md, cwd.
+Priority: explicit --root, RH_ROOT, cwd walk-up for `.rh/` (ENV.md is inside .rh/), cwd.
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ RH_DIR = ".rh"
 # Files kept under .rh/ (clean workspace). src/, results/, papers/ stay at root.
 RH_ARTIFACTS = {
     "PROBLEM.md": "problem_md",
-    "ENV.md": "env_md",
     "PLAN.md": "plan_md",
     "STATUS.md": "status_md",
     "LITERATURE.md": "literature_md",
@@ -24,10 +23,10 @@ RH_ARTIFACTS = {
 
 def find_project_root(start: Path | None = None) -> Path:
     start = (start or Path.cwd()).resolve()
-    # walk up looking for .rh/ or ENV.md
+    # walk up looking for .rh/ (ENV.md is now inside .rh/)
     cur = start
     for parent in [cur, *cur.parents]:
-        if (parent / RH_DIR).is_dir() or (parent / "ENV.md").exists():
+        if (parent / RH_DIR).is_dir():
             return parent
     return start
 
@@ -48,7 +47,7 @@ def rh_dir(root: Path) -> Path:
 def ensure_layout(root: Path) -> Path:
     """Create .rh/ subfolders. Returns the .rh path."""
     d = rh_dir(root)
-    for sub in ("logs", "papers", "notes", "tasks", "tmp"):
+    for sub in ("logs", "notes", "tasks", "tmp"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "results").mkdir(parents=True, exist_ok=True)
@@ -73,10 +72,15 @@ def logs_dir(root: Path) -> Path:
 
 
 def papers_dir(root: Path) -> Path:
-    # SKILL.md papers/ at root; keep both: rh papers/ is managed, root papers/ legacy
-    d = rh_dir(root) / "papers"
+    """Downloaded PDFs live at the project root: ./papers/ (never deleted by rh)."""
+    d = root / "papers"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def env_md(root: Path) -> Path:
+    """ENV.md lives inside .rh/ (config block + environment notes)."""
+    return rh_dir(root) / "ENV.md" if rh_dir(root).exists() else root / "ENV.md"
 
 
 def artifact_path(root: Path, name: str) -> Path:
@@ -85,7 +89,12 @@ def artifact_path(root: Path, name: str) -> Path:
     Migration-safe: if the artifact already exists at root and not in .rh,
     callers should read from root and write through to .rh (or keep both in
     sync). Prefer .rh when initialized.
+
+    ENV.md is always in .rh/ when initialized.
     """
+    if name == "ENV.md":
+        return env_md(root)
+
     in_rh = rh_dir(root) / name
     legacy = root / name
     if in_rh.exists():

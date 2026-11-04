@@ -57,15 +57,16 @@ nothing else to download.
 
 ```bash
 rh init --slug my-project
-rh env set agents.count=2 agents.backend=tmux \
-  literature.search=crw project.git=true
+rh env set agents.count=2 agents.backend=tmux agents.cli=pi \
+  agents.skills=research-helper,crw literature.search=crw project.git=true
 rh env show                 # config as a table, validated
 rh phase 4                  # gated: refuses to skip unmet exits
+rh phase                    # what the current phase still needs
 rh describe                 # the map an agent reads
 ```
 
 The Orchestrator (your agent) interviews you for the environment and writes the
-`## Environment` section of `ENV.md`; `rh` never probes or auto-fills binaries.
+`## Environment` section of `.rh/ENV.md`; `rh` never probes or auto-fills binaries.
 A tool on `PATH` does not mean this project should use it.
 
 ---
@@ -85,14 +86,13 @@ A tool on `PATH` does not mean this project should use it.
 | `rh add log --role R --title T [-m BODY]` | §7 log file |
 | `rh add task "title" [--id S01] [--phase N] [--owner ROLE] [--state idle\|working\|complete] [--verify CMD] [--deliverable FILE] [--depends-on S01,S02] [--kind build\|spike]` | add a board task |
 | `rh search <query> [--max N]` | rg-first local search over `.rh/` + artifacts |
-| `rh task set <id> <idle\|working\|complete>` | change a task state |
-| `rh task list [--phase N] [--state S]` | filter the board |
-| `rh tasks [--phase N]` | lanes + progress bars + table |
+| `rh tasks set <id> <idle\|working\|complete>` | change a task or subtask state |
+| `rh tasks [--phase N] [--state S]` | every task + subtask + status, lanes, progress bars |
 | `rh status` | header, phase rail, per-phase progress |
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
-| `rh phase <0-9>` | set the current phase — **gated**; `--force` records a waiver |
+| `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh plan import [--dry-run]` | mirror `PLAN.md` steps into `tasks.json` |
-| `rh resume` / `rh -r` | open the agent harness with a go-forward prompt |
+| `rh resume` / `rh -r` | run the configured agent CLI in **this terminal** with a go-forward prompt |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
 | `rh describe [--json]` | the AI map: layout, phases, env keys, budget |
 
@@ -115,11 +115,10 @@ State lives in plain files, not a database:
 
 ```
 <project>/
-  .rh/                machine mirror + logs, notes, managed PDFs, tasks
+  .rh/                ENV.md, machine mirror, logs, notes, tasks, workflow
   src/                implementation
   results/            every number + the script that produced it
-  papers/             unmanaged PDFs
-  ENV.md              config block + Orchestrator-written environment notes
+  papers/             downloaded PDFs (kept, never deleted by rh)
   PROBLEM.md          goal, scope, success criteria, falsifier
   OUTPUT_LAYOUT.md    output skeleton + patterns from comparable papers
   PLAN.md             approved steps
@@ -129,7 +128,7 @@ State lives in plain files, not a database:
   MANUSCRIPT.md       write-up
 ```
 
-`ENV.md` is the single config source; `.rh/env.json` mirrors it. `rh env set`
+`.rh/ENV.md` is the single config source; `.rh/env.json` mirrors it. `rh env set`
 rewrites the JSON block and preserves whatever the Orchestrator wrote below it.
 
 ---
@@ -146,8 +145,8 @@ rh skill install
 
 What the skill adds:
 
-- **Roles** — Orchestrator, Literature, Researcher, Reviewer, Critique, Writer,
-  with a budget mapping for 1–4 agents.
+- **Roles** — Orchestrator (always the current runner), Literature, Researcher,
+  Reviewer, Critique, Writer, with a budget mapping for 1–4 parallel agents.
 - **Gates** — user approves the plan, critique veto, "no result without a file".
 - **Templates** — `ENV.md`, `STATUS.md`, `OUTPUT_LAYOUT.md`, `PLAN.md` steps, logs.
 - **Reading discipline** — one layout, a pattern tally, DOI anchors, no paraphrasing

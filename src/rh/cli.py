@@ -7,12 +7,11 @@ Commands:
   rh add log --role ROLE --title TITLE [-m BODY]
   rh add task TITLE [--id ID] [--phase N] [--owner ROLE] [--state S] [--verify CMD] [--deliverable FILE] [--subtask TEXT ...]
   rh search <query> [--max N]
-  rh task set <id> {idle|working|complete}
-  rh task list [--phase N] [--state S]
-  rh tasks [--phase N]
+  rh tasks [--phase N] [--state S]      # all tasks + subtasks + status
+  rh tasks set <id> {idle|working|complete}
   rh status [--json]
   rh workflow [--mermaid] [--write]
-  rh phase <0-9>
+  rh phase [0-9]          # show the current phase + its exit gate, or set it (gated)
   rh plan import [--dry-run]
   rh skill install [--dest DIR] [--force]
   rh describe   # AI-friendly map: phases, layout, env schema (decisions you must surface)
@@ -54,9 +53,10 @@ def cmd_init(args, root: Path):
         return 0
     print(ui.banner("rh init", f"{root}"))
     print(f"  {ui.colorize('✓', ui.GREEN)} created {d}/")
-    for sub in ("logs/", "papers/", "notes/", "tasks/"):
+    for sub in ("logs/", "notes/", "tasks/", "tmp/"):
         print(f"  {ui.colorize('✓', ui.GREEN)} .rh/{sub}")
     print(f"  {ui.colorize('✓', ui.GREEN)} src/ results/ papers/ at root")
+    print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
     print()
     print(f"Next: {ui.colorize('rh env set project.slug=<name>', ui.CYAN)}  "
           f"·  {ui.colorize('rh env show', ui.CYAN)}")
@@ -100,7 +100,7 @@ def cmd_env_show(args, root: Path):
     tail = config.load_tail(root)
     if tail.strip():
         print()
-        print(ui.colorize("Environment notes (from ENV.md)", ui.DIM))
+        print(ui.colorize("Environment notes (from .rh/ENV.md)", ui.DIM))
         print(tail)
     if problems:
         print()
@@ -167,7 +167,7 @@ def cmd_env_set(args, root: Path):
     if getattr(args, "json", False):
         ui.json_out(env)
         return 0
-    print(ui.colorize("✓ wrote ENV.md + .rh/env.json", ui.GREEN))
+    print(ui.colorize(f"✓ wrote {paths.env_md(root)} + .rh/env.json", ui.GREEN))
     print(json.dumps(env, indent=2))
     return 0
 
@@ -191,7 +191,7 @@ def cmd_add(args, root: Path):
         task = store.add(
             args.heading, task_id=args.id, phase=phase, owner=args.owner,
             state=args.state, deliverable=args.deliverable, verify=args.verify,
-            depends_on=deps, kind=args.kind,
+            depends_on=deps, kind=args.kind, subtasks=args.subtask,
         )
         print(ui.colorize(f"✓ task {task['id']} ({task['state']}, {tasks_mod.phase_name(phase)})", ui.GREEN))
         return 0
@@ -234,26 +234,6 @@ def cmd_task_set(args, root: Path):
     return 0
 
 
-@with_root
-def cmd_task_list(args, root: Path):
-    store = tasks_mod.TaskStore(root)
-    tasks = store.list(phase=args.phase, state=args.state)
-    if getattr(args, "json", False):
-        ui.json_out(tasks)
-        return 0
-    if not tasks:
-        print(ui.colorize("No tasks. `rh plan import` (from PLAN.md) or `rh add task \"...\"`.", ui.DIM))
-        return 0
-    rows = []
-    for t in tasks:
-        rows.append([
-            t["id"], ui.state_label(t["state"]), tasks_mod.phase_name(t["phase"]),
-            t["owner"], (t["title"] or "")[:44], (t.get("deliverable") or "")[:24],
-        ])
-    print(ui.table(["id", "state", "phase", "owner", "title", "deliverable"], rows))
-    return 0
-
-
 def group_tasks(tasks):
     """openspec-style grouping: Draft (no tasks) / Active / Complete."""
     draft = [t for t in tasks if t["state"] == "idle" and not any(s["state"] != "idle" for s in t.get("subtasks", []))]
@@ -269,7 +249,7 @@ def cmd_tasks(args, root: Path):
     env = config.load_env(root)
     current = store.current_phase()
     summary = store.summary()
-    tasks = store.list(phase=args.phase)
+    tasks = store.list(phase=args.phase, state=args.state)
     groups = group_tasks(tasks)
     # phase gate (SKILL.md §3): warnings when the pipeline is skipped
     gate = config.phase_gate(root, env)
@@ -313,6 +293,10 @@ def cmd_tasks(args, root: Path):
                 stot = len(t["subtasks"])
                 sub = f"  [{sd}/{stot} subtasks]"
             print(f"  {box} {ui.colorize(t['id'], ui.CYAN):8} {t['title']}{sub}")
+            for st in t.get("subtasks", []):
+                sbox = "[x]" if st["state"] == "complete" else "[~]" if st["state"] == "working" else "[ ]"
+                print(f"        {ui.colorize(sbox, ui.state_color(st['state']))} "
+                      f"{st['id']:9} {st['title']}")
         print()
     # flat table for scripting detail
     rows = [[t["id"], ui.state_label(t["state"]), tasks_mod.phase_name(t["phase"]), (t["title"] or "")[:42]] for t in tasks]
@@ -333,7 +317,6 @@ def cmd_status(args, root: Path):
             "phase": summary["current_phase"],
             "phase_name": tasks_mod.phase_name(summary["current_phase"]),
             "summary": summary,
-            "agents": env.get("agents", {}),
             "gate": gate,
             "initialized": (root / ".rh").exists(),
         })
@@ -343,7 +326,7 @@ def cmd_status(args, root: Path):
     # openspec status style: header line + progress + artifact checklist
     print(f"Project: {slug} · Phase: {tasks_mod.phase_name(summary['current_phase'])}")
     print(f"Progress: {summary['complete']}/{summary['total']} steps complete  {ui.bar(summary['pct'], width=16)}")
-    print(f"Changes (task lanes):")
+    print("Changes (task lanes):")
     print(f"  [x] Draft (idle)      {len([t for t in store.list() if t['state']=='idle'])}")
     print(f"  [~] Active (working)  {summary['working']}")
     print(f"  [x] Complete          {summary['complete']}")
@@ -358,7 +341,7 @@ def cmd_status(args, root: Path):
     print(f"{ui.bar(summary['pct'], width=24)}  {summary['complete']}/{summary['total']} steps · "
           f"{summary['working']} working · {summary['idle']} idle")
     print()
-    # tasks grouped by phase
+    # per-phase progress only — the task/subtask detail lives in `rh tasks`
     by_phase: dict[int, list[dict]] = {}
     for t in store.list():
         by_phase.setdefault(t["phase"], []).append(t)
@@ -367,22 +350,13 @@ def cmd_status(args, root: Path):
     for phase in sorted(by_phase):
         tasks = by_phase[phase]
         done = sum(1 for t in tasks if t["state"] == "complete")
+        working = [t["id"] for t in tasks if t["state"] == "working"]
         bar_pct = round(100 * done / len(tasks)) if tasks else 0
-        print(f"{ui.colorize(tasks_mod.phase_name(phase), ui.BOLD)}  {ui.bar(bar_pct, width=14)}  ({done}/{len(tasks)})")
-        for t in tasks:
-            sub = ""
-            if t.get("subtasks"):
-                sd = sum(1 for s in t["subtasks"] if s["state"] == "complete")
-                sub = f"  [{sd}/{len(t['subtasks'])} subtasks]"
-            print(f"  {ui.state_label(t['state'])} {t['id']} {t['title']}{sub}")
-    # agents
-    agents = env.get("agents", {})
-    print()
-    print(ui.colorize(f"agents: count={agents.get('count')} backend={agents.get('backend')}", ui.DIM))
-    roles = agents.get("roles", {})
-    for role, model in roles.items():
-        if model:
-            print(f"  {ui.colorize(f'{role:14}', ui.DIM)} {model}")
+        now = f" · working: {', '.join(working)}" if working else ""
+        print(f"{ui.colorize(tasks_mod.phase_name(phase), ui.BOLD)}  {ui.bar(bar_pct, width=14)}  "
+              f"({done}/{len(tasks)}){now}")
+    if by_phase:
+        print(ui.colorize("  task + subtask detail: `rh tasks`", ui.DIM))
     return 0
 
 
@@ -433,10 +407,15 @@ def cmd_workflow(args, root: Path):
 
     # pure-output modes first: everything below adds UI chrome around them
     if args.tools:
-        print(ui.colorize("Renderers available:", ui.BOLD))
-        at = workflow.ascii_tools()
-        print(f"  ascii (in-terminal): {at or 'none — ' + ' | '.join(workflow.ASCII_TOOL_INSTALL.values())}")
-        print(f"  svg/png (files):     {workflow.diagram_tools() or 'none — cargo install mmdr'}")
+        print(ui.banner("Renderers", "rh workflow: external tools are optional — the built-in text view always works"))
+        rows = [["built-in text", "always", "compact node/edge view from the .mmd"]]
+        for tool, spec in workflow.ASCII_TOOLS.items():
+            rows.append([f"{tool} (ascii)", "✓ installed" if workflow.tool_installed(tool) else "—",
+                         f"{' | '.join(spec['bins'])} — {workflow.ASCII_TOOL_INSTALL.get(tool, '')}"])
+        for tool, spec in workflow.DIAGRAM_TOOLS.items():
+            rows.append([f"{tool} (svg/png)", "✓ installed" if workflow.tool_installed(tool) else "—",
+                         f"{' | '.join(spec['bins'])} — writes .rh/workflow.svg|png"])
+        print(ui.table(["renderer", "state", "how"], rows))
         return 0
     if getattr(args, "example", False):
         if args.phases:
@@ -495,6 +474,24 @@ def cmd_phase_set(args, root: Path):
     store = tasks_mod.TaskStore(root)
     current = store.current_phase()
     gate = config.phase_gate(root)
+
+    if args.phase is None or args.phase == current:
+        # `rh phase` — the phase is a gate, not a badge: show what it costs to leave it
+        if getattr(args, "json", False):
+            ui.json_out({"phase": current, "phase_name": tasks_mod.phase_name(current),
+                         "exit_gate": tasks_mod.PHASE_EXIT[current], "met": gate["done"][current],
+                         "gate": gate})
+            return 0
+        print(ui.banner(f"Phase {tasks_mod.phase_name(current)}"))
+        status = ui.colorize("met", ui.GREEN) if gate["done"][current] else ui.colorize("unmet", ui.YELLOW)
+        print(f"  exit gate ({status}): {tasks_mod.PHASE_EXIT[current]}")
+        if args.phase is None:
+            nxt = min(current + 1, 9)
+            if nxt != current:
+                print(f"  next   → {tasks_mod.phase_name(nxt)}: {tasks_mod.PHASE_EXIT[nxt]}")
+            print(ui.colorize("  set it with `rh phase N` (gated; --force records a waiver)", ui.DIM))
+        return 0
+
     if args.phase > current and not args.force:
         # hard gate (SKILL.md §3): do not enter the next phase with an unmet gate
         unmet = [i for i in REQUIRED_BEFORE.get(args.phase, ()) if not gate["done"][i]]
@@ -502,13 +499,7 @@ def cmd_phase_set(args, root: Path):
             names = ", ".join(tasks_mod.phase_name(i) for i in unmet)
             print(ui.colorize(f"✗ refusing to enter {tasks_mod.phase_name(args.phase)} — unmet exit gates: {names}", ui.RED), file=sys.stderr)
             for i in unmet:
-                hint = {
-                    0: "`rh env set KEY=VALUE ...` then have the user confirm ENV.md",
-                    1: "write PROBLEM.md (six sections, user approved)",
-                    2: "have the Orchestrator interview the user and write the environment section in ENV.md",
-                    4: "write PLAN.md (two planners + user approval)",
-                }.get(i, "complete the phase artifact")
-                print(f"  - {tasks_mod.phase_name(i)}: {hint}", file=sys.stderr)
+                print(f"  - {tasks_mod.phase_name(i)}: {tasks_mod.PHASE_EXIT[i]}", file=sys.stderr)
             print(ui.colorize("  or re-run with --force and record the waiver in STATUS.md (SKILL.md §0 rule 11)", ui.DIM), file=sys.stderr)
             return 1
     store.set_phase(args.phase)
@@ -518,9 +509,11 @@ def cmd_phase_set(args, root: Path):
         names = ", ".join(tasks_mod.phase_name(i) for i in soft)
         print(ui.colorize(f"⚠ skipping ahead past {names} without artifacts — if user-agreed, note the waiver in STATUS.md (§0 rule 11)", ui.YELLOW), file=sys.stderr)
     if getattr(args, "json", False):
-        ui.json_out({"phase": args.phase, "phase_name": tasks_mod.phase_name(args.phase), "forced": args.force, "gate": gate})
+        ui.json_out({"phase": args.phase, "phase_name": tasks_mod.phase_name(args.phase),
+                     "exit_gate": tasks_mod.PHASE_EXIT[args.phase], "forced": args.force, "gate": gate})
         return 0
     print(ui.colorize(f"✓ phase → {tasks_mod.phase_name(args.phase)}", ui.GREEN))
+    print(f"  exit gate: {tasks_mod.PHASE_EXIT[args.phase]}")
     return 0
 
 
@@ -531,9 +524,11 @@ def cmd_plan_import(args, root: Path):
         ui.json_out(added)
         return 0
     if not added:
-        print(ui.colorize("No new steps in PLAN.md (already imported or no PLAN.md).", ui.DIM))
+        print(ui.colorize("PLAN.md and the board agree (nothing to import or update).", ui.DIM))
     for t in added:
-        print(f"  {ui.colorize('✓', ui.GREEN)} {t['id']} — {t['title']}")
+        mark = "+" if t.get("action") == "added" else "~"
+        fields = f"  [{', '.join(t['fields'])}]" if t.get("fields") else ""
+        print(f"  {ui.colorize(mark, ui.GREEN)} {t['id']} — {t['title']}{fields}")
     return 0
 
 
@@ -544,15 +539,15 @@ def cmd_describe(args, root: Path):
         "version": __version__,
         "root": str(root),
         "layout": {
+            ".rh/ENV.md": "config block + Orchestrator-written environment notes (§2)",
             ".rh/logs/": "SKILL.md §7 event logs",
-            ".rh/papers/": "managed PDFs",
             ".rh/notes/": "rh add note files (heading-structured)",
             ".rh/tasks.json": "machine-readable board (idle|working|complete)",
-            ".rh/env.json": "machine mirror of ENV.md config block",
+            ".rh/env.json": "machine mirror of the .rh/ENV.md config block",
+            ".rh/workflow.mmd": "agent-authored workflow diagram (rh workflow displays it)",
             "src/": "implementation",
             "results/": "produced numbers + generating script",
-            "papers/": "unmanaged PDFs",
-            "ENV.md": "config block + Orchestrator-written environment notes (§2)",
+            "papers/": "downloaded PDFs — keep them, never deleted by rh",
             "PLAN.md": "approved steps (§4 template)",
             "STATUS.md": "truth (§5)",
             "LITERATURE.md": "paper takes with DOI (§3)",
@@ -595,38 +590,29 @@ def cmd_describe(args, root: Path):
 
 @with_root
 def cmd_resume(args, root: Path):
-    """Spawn a configured harness with a go-forward prompt (rh resume / rh -r)."""
+    """Run the agent harness in THIS terminal with a go-forward prompt (rh resume / rh -r)."""
+    # Cheap path check first: an agent must never be opened against the wrong project.
     if not paths.rh_dir(root).exists():
         print(ui.colorize(f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED), file=sys.stderr)
         return 1
     env = config.load_env(root)
     gate = config.phase_gate(root, env)
     if not gate["done"][0]:
-        print(ui.colorize("✗ phase 0 CONFIG unfinished — a harness can only resume a configured project:", ui.RED), file=sys.stderr)
+        print(ui.colorize(f"✗ phase 0 CONFIG unfinished — {paths.env_md(root)} has no parseable config block:", ui.RED), file=sys.stderr)
         print("  `rh env set KEY=VALUE ...` (see `rh env list`), then confirm ENV.md", file=sys.stderr)
         return 1
     dry = getattr(args, "dry_run", False)
-    backend, backend_changed = resume_mod.resolve_backend(getattr(args, "backend", None), env, interactive=not dry)
-    agent_cli, cli_changed = None, False
-    if backend:
-        agent_cli, cli_changed = resume_mod.resolve_agent_cli(getattr(args, "cli", None), env, interactive=not dry)
-        if not agent_cli:
-            print(ui.colorize("✗ no agent CLI chosen — nothing to spawn", ui.RED), file=sys.stderr)
-            return 1
-    if dry and (backend_changed or cli_changed):
-        if not backend:
-            print(ui.colorize(f"[dry-run] harness not configured — a real run would ask here. Detected: {resume_mod.detect_harnesses() or 'none'}", ui.YELLOW))
-        if not agent_cli:
-            print(ui.colorize(f"[dry-run] agent CLI not configured — a real run would ask here. Detected: {resume_mod.detect_agent_clis() or 'none'}", ui.YELLOW))
-    # persist interactive picks so next resume is zero-touch ("configured harness")
-    if backend_changed or cli_changed:
+    agent_cli, cli_changed = resume_mod.resolve_agent_cli(
+        getattr(args, "cli", None), env, interactive=not dry and resume_mod.is_interactive())
+    if not agent_cli:
+        print(ui.colorize("✗ no agent CLI found — nothing to spawn", ui.RED), file=sys.stderr)
+        return 1
+    # persist the pick so the next resume is zero-touch
+    if cli_changed:
         env.setdefault("agents", {})
-        env["agents"]["backend"] = backend or "none"
-        if agent_cli:
-            env["agents"]["cli"] = agent_cli
+        env["agents"]["cli"] = agent_cli
         config.save_env(root, env)
-        print(ui.colorize(f"✓ saved to ENV.md: agents.backend={backend or 'none'}"
-                          + (f" agents.cli={agent_cli}" if agent_cli else ""), ui.GREEN))
+        print(ui.colorize(f"✓ saved to {paths.env_md(root)}: agents.cli={agent_cli}", ui.GREEN))
     store = tasks_mod.TaskStore(root)
     prompt = resume_mod.build_prompt(root, env, gate, store, extra=getattr(args, "prompt", None) or "")
     prompt_file = paths.rh_dir(root) / "resume-prompt.md"
@@ -635,26 +621,20 @@ def cmd_resume(args, root: Path):
     slug = env.get("project", {}).get("slug") or "untitled"
     if getattr(args, "json", False):
         ui.json_out({
-            "root": str(root), "backend": backend, "agent_cli": agent_cli,
+            "root": str(root), "agent_cli": agent_cli,
             "prompt_file": str(prompt_file), "prompt": prompt,
-            "gate": gate, "spawned": False,
+            "gate": gate, "spawned": False, "inline": True,
         })
         return 0
-    print(ui.banner(f"rh resume — {slug}", f"backend: {backend or 'none (prompt only)'} · agent: {agent_cli or '—'}"))
+    print(ui.banner(f"rh resume — {slug}", f"project: {root} · agent: {agent_cli} (this terminal)"))
     print(prompt)
-    if getattr(args, "dry_run", False) or not backend:
-        if not backend:
-            print()
-            print(ui.colorize(f"prompt written to {prompt_file} — paste it into your agent, or install tmux/herdr/tuios.", ui.YELLOW))
+    if dry:
         return 0
-    script = resume_mod.write_launcher(root, agent_cli, prompt_file)
-    ok, detail = resume_mod.launch(backend, root, script, slug)
-    if ok:
-        print(ui.colorize(f"✓ {detail}", ui.GREEN))
-        print(ui.colorize("  the agent opens as the Orchestrator (skill in prompt); pane/spawn bookkeeping is its job, not rh's.", ui.DIM))
-        return 0
+    print()
+    _started, detail = resume_mod.exec_inline(root, agent_cli, prompt)
+    # exec replaces this process; reaching here means it could not start
     print(ui.colorize(f"✗ {detail}", ui.RED), file=sys.stderr)
-    print(ui.colorize(f"  prompt ready at {prompt_file}; launcher at {script}", ui.DIM), file=sys.stderr)
+    print(ui.colorize(f"  prompt ready at {prompt_file}", ui.DIM), file=sys.stderr)
     return 1
 
 
@@ -720,6 +700,7 @@ def build_parser():
     s.add_argument("--verify", default="")
     s.add_argument("--depends-on", dest="depends_on", default="", help="comma-separated task ids this depends on")
     s.add_argument("--kind", default="build", choices=["build", "spike"])
+    s.add_argument("--subtask", action="append", default=[], metavar="TEXT", help="repeatable subtask line")
     s.set_defaults(func=cmd_add)
 
     s = sub.add_parser("search", help="local search (rg or python)", parents=[common])
@@ -727,13 +708,11 @@ def build_parser():
     s.add_argument("--max", type=int, default=40)
     s.set_defaults(func=cmd_search)
 
-    s = sub.add_parser("task", help="task board", parents=[common])
-    tsub = s.add_subparsers(dest="t", required=True)
-    ts = tsub.add_parser("set", parents=[common]); ts.add_argument("id"); ts.add_argument("state", choices=list(tasks_mod.TASK_STATES)); ts.set_defaults(func=cmd_task_set)
-    tl = tsub.add_parser("list", parents=[common]); tl.add_argument("--phase", type=int, default=None); tl.add_argument("--state", default=None, choices=list(tasks_mod.TASK_STATES)); tl.set_defaults(func=cmd_task_list)
-
-    s = sub.add_parser("tasks", help="task board + progress", parents=[common])
+    s = sub.add_parser("tasks", help="task board + progress; `rh tasks set <id> <state>`", parents=[common])
     s.add_argument("--phase", type=int, default=None)
+    s.add_argument("--state", default=None, choices=list(tasks_mod.TASK_STATES))
+    tsub = s.add_subparsers(dest="t", required=False)
+    ts = tsub.add_parser("set", parents=[common]); ts.add_argument("id"); ts.add_argument("state", choices=list(tasks_mod.TASK_STATES)); ts.set_defaults(func=cmd_task_set)
     s.set_defaults(func=cmd_tasks)
 
     s = sub.add_parser("status", help="project status", parents=[common])
@@ -748,8 +727,8 @@ def build_parser():
     s.add_argument("--no-render", action="store_true", help="skip ascii display")
     s.set_defaults(func=cmd_workflow)
 
-    s = sub.add_parser("phase", help="set current phase: rh phase <0-9> (gated; --force to override)")
-    s.add_argument("set", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
+    s = sub.add_parser("phase", help="show the current phase + exit gate, or set it: rh phase [0-9] (gated)")
+    s.add_argument("set", nargs="?", default=None, choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
     s.add_argument("--force", action="store_true", help="jump despite unmet gates (waiver goes in STATUS.md)")
     s.set_defaults(func=cmd_phase_set)
 
@@ -761,7 +740,6 @@ def build_parser():
     s.set_defaults(func=cmd_describe)
 
     s = sub.add_parser("resume", help="spawn a configured harness with a go-forward prompt", parents=[common])
-    s.add_argument("--backend", default=None, help="tmux | herdr | tuios (default: config agents.backend, else ask)")
     s.add_argument("--cli", dest="cli", default=None, help="agent binary, e.g. opencode (default: config agents.cli, else ask)")
     s.add_argument("--prompt", default=None, help="extra user instructions appended to the go-forward prompt")
     s.add_argument("--dry-run", action="store_true", help="show prompt + choices without spawning")
@@ -777,7 +755,7 @@ def build_parser():
     return p
 
 
-KNOWN_CMDS = {"init", "env", "add", "search", "task", "tasks", "status", "workflow", "phase", "plan", "describe", "resume", "skill"}
+KNOWN_CMDS = {"init", "env", "add", "search", "tasks", "status", "workflow", "phase", "plan", "describe", "resume", "skill"}
 
 
 def main(argv=None) -> int:
@@ -790,8 +768,8 @@ def main(argv=None) -> int:
         build_parser().print_help()
         return 2
     # `rh phase N` → phase int
-    if args.cmd == "phase" and args.set is not None:
-        args.phase = int(args.set)
+    if args.cmd == "phase":
+        args.phase = int(args.set) if args.set is not None else None
     return args.func(args)
 
 

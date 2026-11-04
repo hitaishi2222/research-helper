@@ -16,8 +16,9 @@ from .tasks import TaskStore
 DEFAULT_ENV: dict = {
     "agents": {
         "count": 1,
-        "backend": "none",  # tmux | herdr | tuios | none
+        "backend": "none",  # tmux | herdr | tuios | none — how the Orchestrator spawns parallel agents
         "cli": "",  # agent binary rh resume spawns (user-named)
+        "skills": ["research-helper"],  # skills every spawned agent must read first
         "roles": {
             "orchestrator": {},
             "literature": {},
@@ -44,8 +45,9 @@ PAYWALL_POLICIES = ("ask_user", "skip")
 # dotted key -> (type, choices, help) — drives `rh env set` and docs
 ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
     ("agents.count", "int", (1, 2, 3, 4), "how many agents may run at once, 1..4"),
-    ("agents.backend", "str", AGENT_BACKENDS, "tmux | herdr | tuios | none (serial); rh resume spawns this"),
+    ("agents.backend", "str", AGENT_BACKENDS, "tmux | herdr | tuios | none — how the Orchestrator spawns parallel agents (rh resume always runs inline)"),
     ("agents.cli", "str", (), "agent binary the harness spawns, e.g. opencode (rh resume)"),
+    ("agents.skills", "list", (), "skills every spawned agent must read first, comma-separated"),
     ("agents.roles.orchestrator", "dict", (), "provider+model, must be the model running this session"),
     ("agents.roles.literature", "dict", (), "provider+model for the Literature role"),
     ("agents.roles.researcher", "dict", (), "provider+model for the Researcher role"),
@@ -115,6 +117,13 @@ def coerce_value(raw: str, kind: str):
     raw = raw.strip()
     if kind == "int":
         return int(raw)
+    if kind == "list":
+        if raw.startswith("["):
+            v = json.loads(raw)
+            if not isinstance(v, list):
+                raise ValueError(f"expected JSON list, got {raw!r}")
+            return [str(x).strip() for x in v if str(x).strip()]
+        return [x.strip() for x in raw.split(",") if x.strip()]
     if kind == "bool":
         if raw.lower() in ("true", "yes", "1", "on"):
             return True
@@ -167,6 +176,9 @@ def validate(env: dict) -> list[str]:
     if orch:
         if not isinstance(orch, dict) or not orch:
             problems.append("agents.roles.orchestrator must be a model object")
+    skills = env.get("agents", {}).get("skills")
+    if not isinstance(skills, list) or not all(isinstance(s, str) and s.strip() for s in skills):
+        problems.append("agents.skills must be a list of skill names, e.g. [\"research-helper\"]")
     return problems
 
 
@@ -212,12 +224,26 @@ def parse_env_md(path: Path) -> dict | None:
 
 def load_tail(root: Path) -> str:
     """The Orchestrator's environment notes below the config block."""
-    return _block_and_tail(root / "ENV.md")[1]
+    return _block_and_tail(ensure_env_location(root))[1]
+
+
+def ensure_env_location(root: Path) -> Path:
+    """ENV.md lives in .rh/. Migrate a ROOT ENV.md (or a symlink to it) once."""
+    target = paths.env_md(root)
+    if target.is_symlink():
+        content = target.read_text(encoding="utf-8")
+        target.unlink()
+        target.write_text(content, encoding="utf-8")
+    elif not target.exists():
+        legacy = root / "ENV.md"
+        if legacy.exists() and paths.rh_dir(root).exists():
+            legacy.replace(target)
+    return target
 
 
 def load_env(root: Path) -> dict:
-    """Load effective config: ENV.md block (truth) or .rh/env.json mirror or defaults."""
-    env_md = root / "ENV.md"
+    """Load effective config: .rh/ENV.md block (truth) or .rh/env.json mirror or defaults."""
+    env_md = ensure_env_location(root)
     if env_md.exists():
         parsed = parse_env_md(env_md)
         if parsed is not None:
@@ -232,10 +258,11 @@ def load_env(root: Path) -> dict:
 
 
 def save_env(root: Path, env: dict) -> None:
-    """Write ENV.md config block (preserving the notes below it) + .rh/env.json mirror."""
-    root.mkdir(parents=True, exist_ok=True)
-    _, tail = _block_and_tail(root / "ENV.md")
-    (root / "ENV.md").write_text(render_env_md(env, tail), encoding="utf-8")
+    """Write .rh/ENV.md config block (preserving the notes below it) + .rh/env.json mirror."""
+    env_path = ensure_env_location(root)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    _, tail = _block_and_tail(env_path)
+    env_path.write_text(render_env_md(env, tail), encoding="utf-8")
     mirror = paths.env_json(root)
     mirror.parent.mkdir(parents=True, exist_ok=True)
     mirror.write_text(json.dumps(env, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -251,12 +278,12 @@ def config_complete(env: dict) -> bool:
 
 
 def config_written(root: Path) -> bool:
-    """True only if ENV.md exists and holds a parseable config block.
+    """True only if .rh/ENV.md exists and holds a parseable config block.
 
     This is the phase-0 exit gate: the block was written (rh env set / init),
     so it is user-confirmed config, not silent defaults.
     """
-    return parse_env_md(root / "ENV.md") is not None
+    return parse_env_md(paths.env_md(root)) is not None
 
 
 def phase_gate(root: Path, env: dict | None = None) -> dict:

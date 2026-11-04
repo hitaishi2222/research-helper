@@ -20,15 +20,15 @@ A research project should be reproducible from its files alone:
 
 ## v0.1 — CLI core ✅
 
-- [x] `.rh/` workspace, `ENV.md` as the single config source + `.rh/env.json` mirror
+- [x] `.rh/` workspace, `.rh/ENV.md` as the single config source + `.rh/env.json` mirror
 - [x] `rh init`, `rh env show|set|list`, `rh describe`
 - [x] heading-structured artifacts: `add note|literature|layout|gaps|problem|plan|status|manuscript`
-- [x] task board: `add task`, `task set|list`, `tasks`, `plan import`
-- [x] phase pipeline with gated `rh phase` and waivers
+- [x] task board: `add task`, `tasks`, `tasks set`, `plan import` (titles refresh)
+- [x] phase pipeline with gated `rh phase` (no-arg shows the exit gate) and waivers
 - [x] `rh status` — phase rail, progress bars, per-phase tasks
 - [x] `rh search` — rg-first, Python fallback, no indexing
-- [x] `rh workflow` — viewer for the agent-authored mermaid DAG
-- [x] `rh resume` — open the configured harness with a go-forward prompt
+- [x] `rh workflow` — viewer for the agent-authored mermaid DAG (`bm`-first renderer priority + built-in text fallback)
+- [x] `rh resume` — exec the configured agent in the current terminal with a go-forward prompt
 - [x] rich-based UI (tables, bars, banners, phase rail); `--json` everywhere
 - [x] environment is interviewed, never auto-probed (`rh env audit` removed)
 

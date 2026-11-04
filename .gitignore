@@ -15,3 +15,6 @@ ENV.md
 papers/
 results/
 .pi/
+
+# local issue scratchpad (not part of the project)
+ISSUES.md

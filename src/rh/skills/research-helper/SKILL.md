@@ -1,6 +1,6 @@
 ---
 name: research-helper
-description: Orchestrate a research project end to end — intake, environment setup, literature survey, dual-model planning, implementation with adversarial review, critique gate, manuscript, close — driven by an ENV.md in the project root that holds the config block (agent count, per-role models, literature tooling, approval gates) and the environment notes. Use when the user wants to scope a research question, survey literature, build and test an experiment, or write it up.
+description: Orchestrate a research project end to end — intake, environment setup, literature survey, dual-model planning, implementation with adversarial review, critique gate, manuscript, close — driven by `.rh/ENV.md` in the project that holds the config block (agent count, per-role models, literature tooling, approval gates) and the environment notes. Use when the user wants to scope a research question, survey literature, build and test an experiment, or write it up.
 ---
 
 # Research Helper
@@ -16,8 +16,10 @@ Nothing here is advisory. If a rule cannot be followed, stop and ask.
 ## 0. Non-negotiables
 
 1. **The current runner is always the Orchestrator.** Whoever loaded this skill is the head.
+   It is the default: do not hand the role to a spawned agent. It alone asks the user
+   questions, merges the plan, and updates `STATUS.md`.
 2. **Never choose a model.** Agent count and every role's model live in the config block at
-   the top of `ENV.md`. To change them, the user asks the Orchestrator to edit that block.
+   the top of `.rh/ENV.md`. To change them, the user asks the Orchestrator to edit that block.
 3. **Ask before every state-changing action.** See §6.
 4. **No empty placeholder files.** Every artifact is created when it first has content.
 5. **No silent scope change.** Anything not in an approved `PLAN.md` needs approval first.
@@ -26,12 +28,22 @@ Nothing here is advisory. If a rule cannot be followed, stop and ask.
    produced it does not exist and may not appear in `MANUSCRIPT.md`.
 8. **"Done" requires proof.** Tests green, plan steps checked, Critique has zero open
    blocking questions. Claims without evidence are rework.
-9. **`STATUS.md` is truth.** Update it after every step and before every question to the user.
+9. **`STATUS.md` is truth — and it is the Orchestrator's own work.** Update it after every
+   step and before every question to the user. Never delegate that update to a spawned agent.
 10. **Re-read the `ENV.md` config block at the start of every phase.** Never cache it. The
     environment notes below it are re-read too — a version recorded in phase 2 may have moved.
 11. **The user may waive a rule.** A waiver is not silent: name it in `STATUS.md` history with
     the rule number and in the manuscript's limitations. Without one, an unmet rule stops
     the phase.
+12. **Verify the project path before opening any agent.** Resolve the root, confirm `.rh/`
+    and `.rh/ENV.md` are there, and state the path to the user before spawning. Never open
+    an agent in `$HOME`, a parent directory, or a neighbouring project.
+13. **Close what you opened.** When a spawned agent's job is done, close its pane, window or
+    tab and record the close in `STATUS.md`. Agents left running burn the user's credits.
+14. **One agent means fresh eyes come from a new session.** With `agents.count = 1` there is
+    no independent context to review the work. After a gate-heavy step (plan approved,
+    implementation done, critique answered) tell the user to continue in a new session and
+    hand over `STATUS.md` + `PLAN.md` as the handoff, instead of stretching this transcript.
 
 ---
 
@@ -44,8 +56,8 @@ Inside the project root:
 
 ```
 <project root>/
+  .rh/ENV.md        config block (phase 0) + environment notes      Orchestrator  phase 0/2
   PROBLEM.md        goal, scope, success criteria, falsifier        Orchestrator  phase 1
-  ENV.md            config block (phase 0) + environment notes      Orchestrator  phase 0/2
   PLAN.md           approved step list (links ENV.md for tooling)   Planners      phase 4
   STATUS.md         current state, roster, blockers, open questions Orchestrator  phase 5+
   LITERATURE.md     what we took from each paper, with citations     Literature    phase 3
@@ -54,7 +66,8 @@ Inside the project root:
   GAPS.md           implementation sourcing + upstream gaps          Lit/Researcher phase 3+
   MANUSCRIPT.md     write-up                                         Writer        phase 8
   papers/           downloaded PDFs, named <firstauthor><year>_<slug>.pdf
-  logs/             event logs, see §7
+                    keep them: never delete or move a downloaded paper
+  .rh/logs/         event logs, see §7
   src/              implementation
   results/          every produced number, table, figure + the script that made it
 ```
@@ -64,15 +77,16 @@ skipped with the user's agreement, its artifact simply never exists — that is 
 an empty file is not.
 
 The `rh` CLI (§10) keeps a machine-readable mirror of this state under `.rh/`
-(`env.json`, `tasks.json`, `logs/`, `notes/`, `workflow.mmd`) — the artifacts
-above remain the truth; `.rh/` is derived display state, with the single
-exception that `rh env set` writes ENV.md itself.
+(`ENV.md`, `env.json`, `tasks.json`, `logs/`, `notes/`, `workflow.mmd`) — the
+artifacts above remain the truth; `.rh/` is derived display state, with the two
+exceptions that `rh env set` writes `.rh/ENV.md` itself and `rh` never deletes
+downloaded `papers/`.
 
 ---
 
-## 2. `ENV.md` — config block
+## 2. `.rh/ENV.md` — config block
 
-Location: `<project root>/ENV.md`. The `jsonc` block at its top is the only config in this
+Location: `<project root>/.rh/ENV.md`. The `jsonc` block at its top is the only config in this
 system; there is no separate config file and nothing config-like lives in the skill
 directory. If the block is absent or unparseable, run phase 0. Never hand-edit it silently;
 propose a diff, get approval, then write. Phase 2 appends the environment notes below the block.
@@ -84,8 +98,11 @@ installed on the machine. A binary on PATH does not mean this project should use
 ```jsonc
 {
   "agents": {
-    "count": 1, // how many agents may run at once, 1..4
+    "count": 1, // how many agents may run at once, 1..4 (asked as: how many
+                //   parallel agents do you need for planning and research?)
     "backend": "tmux", // tmux | herdr | tuios | none (none = no panes, serial)
+    "cli": "pi", // the agent binary this project runs (rh resume execs it)
+    "skills": ["research-helper"], // skills every spawned agent must read first
     "roles": {
       // provider+model per role; the Orchestrator slot must be
       "orchestrator": {}, //   the model actually running this session
@@ -119,9 +136,11 @@ installed on the machine. A binary on PATH does not mean this project should use
 ```
 
 Interview order (batch 2–3 unrelated keys per question; show the resulting block before
-moving on): project root → slug → agent count → backend → per-role models → planner models →
+moving on): project root → slug → **how many parallel agents the user wants for planning and
+research (1..4)** → backend → agent CLI → skills to read → per-role models → planner models →
 search/browse tool → reference manager → reading method → paywall policy → git → confirm
-gates. The root is never stored: it is the directory `ENV.md` sits in.
+gates. The root is never stored: it is the directory `.rh/ENV.md` sits in, and `.rh/` is
+what needs verifying before any agent is opened (rule 12).
 
 ---
 
@@ -136,11 +155,11 @@ gates. The root is never stored: it is the directory `ENV.md` sits in.
 
 Every phase states its **exit gate**. Do not enter the next phase with an unmet gate.
 
-### Phase 0 — CONFIG → `ENV.md` config block
+### Phase 0 — CONFIG → `.rh/ENV.md` config block
 
-Ask for the project root, then load `<root>/ENV.md`; if absent or its config block does not
-parse, interview and write the block. Print it and get a yes. Exit gate: the block parses,
-the user confirmed, and the file sits in the root the user named.
+Ask for the project root, then load `<root>/.rh/ENV.md`; if absent or its config block does
+not parse, interview and write the block. Print it and get a yes. Exit gate: the block
+parses, the user confirmed, and the file sits in `.rh/` of the root the user named.
 
 ### Phase 1 — INTAKE → `PROBLEM.md`
 
@@ -149,7 +168,7 @@ as success; what would **falsify** the result; constraints (time, hardware, data
 explicitly out of scope. Exit gate: `PROBLEM.md` has all six sections and the user has read
 it back to the Orchestrator in their own words or approved it.
 
-### Phase 2 — ENVIRONMENT → `ENV.md` environment notes, under the config block
+### Phase 2 — ENVIRONMENT → `.rh/ENV.md` environment notes, under the config block
 
 Interview the user; do not probe. Ask which runtimes, packages, simulators, solvers, GPU
 stack and CLI tools this project will actually use, and which versions they expect. Record
@@ -208,11 +227,17 @@ exactly one layout.
 ### Phase 4 — PLAN → `PLAN.md`
 
 Two planners on different models plan **independently** (no shared transcript), each
-writing its own candidate plan. Then they argue directly with each other: defend, concede,
-or counter. Planners run one after the other, so they are exempt from the `agents.count`
-concurrency budget (§5). `planners.max_rounds = 0` means three rounds; past that, record the
-unresolved split in `PLAN.md` and ask the user — never keep arguing on the user's credits.
-Every round is logged (§7).
+writing its own candidate plan. Then they talk **to each other, not to the Orchestrator**:
+defend, concede, or counter until they have one agreed plan. The Orchestrator stays out of
+the argument — it is the chair, not a third planner. Only when the planners hand over a
+finalized candidate does the Orchestrator review it, reconcile it with `PROBLEM.md` and the
+approved artifacts, and bring it to the user for the plan gate.
+
+Planners run one after the other, so they are exempt from the `agents.count` concurrency
+budget (§5). `planners.max_rounds = 0` means three rounds; past that, record the unresolved
+split in `PLAN.md` and ask the user — never keep arguing on the user's credits. Every round
+is logged (§7). With `agents.count = 1` there is no second planner context: say so, plan
+alone, and hand the user to a fresh session for the plan gate (rule 14).
 
 The merged `PLAN.md` is ordered steps, each with: id, action, owner role, deliverable file,
 **verification command or check**, dependencies on other steps, and estimated risk. Plus the
@@ -223,12 +248,13 @@ Exit gate: both planners state agreement in `PLAN.md` ("agreed by <model> / <mod
 <date>"), and the user approves the plan (`gates.user_approves_plan`). No implementation
 before that yes.
 
-### Phase 5 — STATE → `STATUS.md`, `logs/`
+### Phase 5 — STATE → `STATUS.md`, `.rh/logs/`
 
 `STATUS.md` holds: current phase and step id, agent roster (role → model → backend window),
 blockers, open questions aimed at the user, and a timestamped one-line change history.
-Every step transition edits it. Exit gate: it accurately describes reality (re-read and
-check before answering any "where are we" question).
+Every step transition edits it — the Orchestrator does this itself, never a spawned agent
+(rule 9). Exit gate: it accurately describes reality (re-read and check before answering any
+"where are we" question).
 
 ### Phase 6 — IMPLEMENT → `src/`, `results/`
 
@@ -247,7 +273,7 @@ asks. Drastic changes never happen on the agent's own initiative.
 Exit gate: all plan steps (except open `spike`s) checked, full test suite green, `results/`
 reproduces from a clean run.
 
-### Phase 7 — CRITIQUE → verdict in `STATUS.md` + `logs/`
+### Phase 7 — CRITIQUE → verdict in `STATUS.md` + `.rh/logs/`
 
 Critique writes numbered must-answer questions against the actual artifacts (not the plan's
 intentions): why this baseline, why this parameter, does the claim follow from the data,
@@ -322,8 +348,12 @@ When a hat's work would be reviewed by the same context that did the work, say s
 `STATUS.md` — the user must know a review was not independent.
 
 Spawn agents with `agents.backend` (`tmux new-window`, `herdr`, `tuios`; see those skills).
-Record each spawn in `STATUS.md`. Confirm count and models with the user before spawning if
-anything differs from the `ENV.md` config block.
+Before spawning, resolve and print the project path and check `.rh/ENV.md` is there (rule 12);
+record each spawn in `STATUS.md`. Confirm count and models with the user before spawning if
+anything differs from the `.rh/ENV.md` config block. When the job is done, close the agent's
+pane/window/tab and record the close with the same care (rule 13). `rh resume` always runs the
+Orchestrator in the terminal the user called it from — spawning panes is the Orchestrator's
+own work, not the resume command's.
 
 ---
 
@@ -347,7 +377,7 @@ When asking: state the action, why it is needed, the blast radius, and the alter
 Log only when something must be remembered — a decision, a dead end, a failed run, a plan
 change, a user override. Routine success is not logged; the artifacts already show it.
 
-`logs/YYYY-MM-DD-HHMM-<role>-<slug>.md`:
+`.rh/logs/YYYY-MM-DD-HHMM-<role>-<slug>.md`:
 
 ```
 # <title>
@@ -363,7 +393,7 @@ change, a user override. Routine success is not logged; the artifacts already sh
 
 ## 8. Templates
 
-`ENV.md` — the config block from §2 on top, then the environment notes the Orchestrator
+`.rh/ENV.md` — the config block from §2 on top, then the environment notes the Orchestrator
 writes after asking (free-form; any tool the user names is valid):
 
 ```
@@ -452,9 +482,10 @@ lives in `.rh/` at the project root:
 
 ```
 .rh/
-  env.json        machine mirror of the ENV.md config block (written by rh env set)
+  ENV.md          the config block + environment notes (§2) — not at the project root
+  env.json        machine mirror of the same block (written by rh env set)
   tasks.json      task board: phases + steps + subtasks, states idle|working|complete
-  logs/ papers/ notes/ tmp/
+  logs/ notes/ tmp/
   workflow.mmd    the project workflow diagram — AUTHORED by the Orchestrator
                   or Researcher (see below); `rh workflow` only displays it
 ```
@@ -465,13 +496,13 @@ Commands agents use per phase:
 |---|---|---|
 | `rh init --slug NAME` | 0 | creates the `.rh/` layout; config is still asked per §2 |
 | `rh env show` / `env list` | 0–2 | read and validate the config block + environment notes |
-| `rh env set KEY=VALUE ...` | 0 | writes ENV.md's block **and** the `.rh/env.json` mirror; preserves the notes below it |
+| `rh env set KEY=VALUE ...` | 0 | writes `.rh/ENV.md`'s block **and** the `.rh/env.json` mirror; preserves the notes below it |
 | `rh add note\|literature\|gaps\|log <h> -m "..."` | 3+ | appends under a heading, creating it if missing; literature accepts a DOI |
 | `rh search <query>` | any | rg-first local search over `.rh/` + artifacts, no indexing |
 | `rh add task / plan import` | 4–6 | mirrors PLAN.md steps into the board (`rh plan import`) |
-| `rh task set <id> idle\|working\|complete` | 5–6 | board state; `rh tasks` / `rh status` display it |
-| `rh phase <0-9>` | any | **gated**: refuses to advance past unmet exit gates; `--force` is a waiver → record it in STATUS.md (rule 11) |
-| `rh resume` / `rh -r` | any | opens the agent harness as the Orchestrator with a go-forward prompt (skill loaded). If backend/agent CLI are unset it asks in the CLI. Pane/spawn bookkeeping is still the Orchestrator's job (§5) |
+| `rh tasks set <id> idle\|working\|complete` | 5–6 | board state (subtask ids work too); `rh tasks` shows every task, subtask and status |
+| `rh phase` / `rh phase N` | any | no argument: the current phase and its exit gate. With N: **gated** advance, refusing unmet gates; `--force` is a waiver → record it in STATUS.md (rule 11) |
+| `rh resume` / `rh -r` | any | execs the configured agent CLI **in this terminal** as the Orchestrator with a go-forward prompt (skills loaded from `agents.skills`). Spawning extra panes is the Orchestrator's job (§5) |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd` as ASCII (renderer-dependent); `--tools` lists renderers; `--example` prints a starter source |
 
 Contracts that keep the two layers consistent:
@@ -492,6 +523,19 @@ Contracts that keep the two layers consistent:
    gate.** Passing the CLI check is not an exit gate by itself; the user
    confirmation, planner agreement, and critique sign-off still happen per §3.
 3. **The board mirrors the plan, not the reverse.** `rh plan import` reads
-   PLAN.md; replanning (§4) updates PLAN.md first, then re-imports. STATUS.md
-   remains the truth (rule 9) — the board is display state for `rh tasks`.
-4. **`--json` works on every command** for agent reads; never parse the pretty UI.
+   PLAN.md and refreshes the board: steps are added, and an existing id gets its
+   title, owner, deliverable, verify, kind, risk and dependencies updated (step
+   ids like `S04b` are valid). Replanning (§4) updates PLAN.md first, then
+   re-imports. STATUS.md remains the truth (rule 9) — the board is display state
+   for `rh tasks`.
+
+4. **Same-terminal resume, explicit agent spawning.** `rh resume` never opens a
+   new pane or workspace: it execs the agent where the user typed the command.
+   Any parallel agent window is created by the Orchestrator, with the path check
+   of rule 12 and the close of rule 13.
+
+5. **`workflow` prefers the installed renderer.** `bm` (beautiful-mermaid CLI) is
+   first in the priority list, then `mermaid-ascii`, `mermansi`, `mermaid2term`,
+   `merx`, `ma`; when none fits the terminal, the CLI falls back to its built-in
+   compact text view rather than printing a 300-column canvas.
+6. **`--json` works on every command** for agent reads; never parse the pretty UI.

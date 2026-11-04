@@ -5,6 +5,7 @@ ASCII rail and tells the user how to get diagrams. Shows current phase.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -111,22 +112,26 @@ def render_flow(current: int, done: list[bool] | None = None) -> str:
     return "\n".join(lines)
 
 
-def diagram_tools() -> list[str]:
-    return [t for t in ("mmdr", "beautiful-mermaid") if shutil.which(t)]
+# Renderer priority is the declaration order below — `bm` (beautiful-mermaid
+# CLI) first, then the other ASCII-native tools, then the built-in text view.
+# ONLY binaries already installed are used: rh never downloads anything, not
+# even via `npx` (the install hints are suggestions for the user).
+ASCII_TOOLS: dict[str, dict] = {
+    "bm": {"bins": ("bm", "beautiful-mermaid"), "argv": ["{bin}", "ascii", "{file}"]},
+    # AlexanderGrooff/mermaid-ascii (Go)
+    "mermaid-ascii": {"bins": ("mermaid-ascii",), "argv": ["{bin}", "-f", "{file}", "-y", "2"]},
+    "mermansi": {"bins": ("mermansi",), "argv": ["{bin}", "--file", "{file}", "--concise"]},
+    "mermaid2term": {"bins": ("mermaid2term",), "argv": ["{bin}", "{file}"]},
+    "merx": {"bins": ("merx",), "argv": ["{bin}", "render", "{file}", "--ascii"]},
+    "ma": {"bins": ("ma",), "argv": ["{bin}", "{file}"]},
+}
 
-
-# ASCII-native mermaid renderers, best first. Each entry: binary -> argv prefix.
-# All read a .mmd file (or stdin) and print box-drawing/ASCII art.
-# ONLY binaries already installed on the machine are used — the CLI never
-# downloads or installs anything (npx -y would silently fetch packages;
-# that's the user's choice, offered as an install option below, not ours).
-ASCII_TOOLS: dict[str, list[str]] = {
-    "bm": ["bm", "ascii", None, "--padding-y", "0"],
-    "mermaid-ascii": ["mermaid-ascii", "-f", None, "-y", "2"],  # AlexanderGrooff/mermaid-ascii (Go)
-    "mermansi": ["mermansi", "--file", None, "--concise"],
-    "mermaid2term": ["mermaid2term", None],
-    "merx": ["merx", "render", None, "--ascii"],
-    "ma": ["ma", None],
+# svg/png renderers, same idea: first installed one wins.
+DIAGRAM_TOOLS: dict[str, dict] = {
+    "bm": {"bins": ("bm", "beautiful-mermaid"),
+           "argv": ["{bin}", "render", "-f", "{fmt}", "-o", "{out}", "{file}"]},
+    "mmdr": {"bins": ("mmdr",), "argv": ["{bin}", "-i", "{file}", "-o", "{out}", "-e", "{fmt}", "-t", "dark"]},
+    "mmdc": {"bins": ("mmdc",), "argv": ["{bin}", "-i", "{file}", "-o", "{out}", "-t", "dark"]},
 }
 
 # Options the CLI merely *suggests* when no renderer is installed — the user
@@ -146,12 +151,34 @@ ASCII_NO_INSTALL = {
 }
 
 
+def find_bin(names) -> str | None:
+    """First command from `names` that is on PATH (aliases share one renderer)."""
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def ascii_tools() -> list[str]:
-    found = []
-    for t, argv in ASCII_TOOLS.items():
-        if shutil.which(argv[0]):
-            found.append(t)
-    return found
+    """Installed ASCII renderers, in priority order."""
+    return [t for t, spec in ASCII_TOOLS.items() if find_bin(spec["bins"])]
+
+
+def diagram_tools() -> list[str]:
+    """Installed svg/png renderers, in priority order."""
+    return [t for t, spec in DIAGRAM_TOOLS.items() if find_bin(spec["bins"])]
+
+
+def tool_installed(name: str) -> bool:
+    spec = ASCII_TOOLS.get(name) or DIAGRAM_TOOLS.get(name) or {}
+    return bool(spec and find_bin(spec["bins"]))
+
+
+def _argv(spec: dict, *, file: Path, out: Path | None = None, fmt: str = "svg") -> list[str]:
+    parts = {"bin": find_bin(spec["bins"]) or spec["bins"][0],
+             "file": str(file), "out": str(out or ""), "fmt": fmt}
+    return [part.format(**parts) for part in spec["argv"]]
 
 
 def mermaid_for_tasks(tasks: list[dict], *, direction: str = "TD") -> str:
@@ -190,25 +217,39 @@ def mermaid_for_tasks(tasks: list[dict], *, direction: str = "TD") -> str:
 def render_ascii(root: Path, mermaid_src: str) -> tuple[str | None, str | None]:
     """Render mermaid source as terminal art via the best installed tool.
 
-    Returns (art, tool). art is None when no tool works. The transient .mmd
-    lives in .rh/tmp/; the caller owns any saved artifact.
+    Returns (art, tool). Installed renderers win in priority order (`bm` first);
+    if none is installed, or its canvas is wider than the terminal, the
+    built-in text view is used instead. The transient .mmd lives in .rh/tmp/;
+    the caller owns any saved artifact.
     """
     tools = ascii_tools()
-    if not tools:
-        return None, None
     from . import paths
     tmp = paths.rh_dir(root) / "tmp" / "workflow-ascii.mmd"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(mermaid_src, encoding="utf-8")
+    limit = max(shutil.get_terminal_size((100, 24)).columns, 100)
+    rejects = []
     for tool in tools:
-        argv = [str(tmp) if part is None else part for part in ASCII_TOOLS[tool]]
+        argv = _argv(ASCII_TOOLS[tool], file=tmp)
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
         except (subprocess.TimeoutExpired, OSError):
             continue
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.rstrip(), tool
-    return None, tools[0]
+        if proc.returncode != 0 or not proc.stdout.strip():
+            rejects.append(f"{tool} failed")
+            continue
+        art = proc.stdout.rstrip()
+        widest = max((len(line) for line in art.splitlines()), default=0)
+        if widest <= limit:
+            return art, tool
+        # a 300-column canvas is unreadable in a terminal: keep it for --svg,
+        # show the compact built-in view here.
+        rejects.append(f"{tool} output {widest} cols wide")
+    art = render_text_graph(mermaid_src)
+    if not art:
+        return None, tools[0] if tools else None
+    note = f"built-in — {rejects[0]} > {limit} cols" if rejects else "built-in"
+    return art, note
 
 
 def render_via(tool: str, mermaid: str) -> str | None:
@@ -230,7 +271,7 @@ def write_mermaid(root: Path, current: int, done: list[bool] | None = None,
 
 def render_image(root: Path, mermaid_src: str, *, fmt: str = "svg",
                  out_name: str = "workflow") -> tuple[Path | None, str]:
-    """Render mermaid source to an svg/png artifact with mmdr (file->file).
+    """Render mermaid source to an svg/png artifact with the best installed tool.
 
     The transient .mmd goes to .rh/tmp/ — the CLI NEVER writes
     .rh/workflow.mmd, that file belongs to the agent alone.
@@ -239,30 +280,121 @@ def render_image(root: Path, mermaid_src: str, *, fmt: str = "svg",
     from . import paths
     tools = diagram_tools()
     if not tools:
-        return None, "no renderer installed (mmdr / beautiful-mermaid)"
+        return None, "no renderer installed (bm / mmdr / mmdc)"
     rh = paths.rh_dir(root)
     mmd = rh / "tmp" / f"{out_name}.mmd"
     mmd.parent.mkdir(parents=True, exist_ok=True)
     mmd.write_text(mermaid_src, encoding="utf-8")
     out = rh / f"{out_name}.{fmt}"
-    tool = tools[0]
-    try:
-        if tool == "mmdr":
-            proc = subprocess.run(
-                ["mmdr", "-i", str(mmd), "-o", str(out), "-e", fmt, "-t", "dark"],
-                capture_output=True, text=True, timeout=30,
-            )
-        else:  # beautiful-mermaid: pipe source in, binary out
-            proc = subprocess.run(
-                [tool, "-e", fmt] if fmt != "svg" else [tool],
-                input=mermaid_src, capture_output=True, timeout=30,
-            )
-            if proc.returncode == 0:
-                out.write_bytes(proc.stdout if isinstance(proc.stdout, bytes) else proc.stdout.encode())
-        if proc.returncode != 0:
-            return None, f"{tool} failed: {(proc.stderr or proc.stdout or '')[:200]}".strip()
-        if not out.exists() or out.stat().st_size == 0:
-            return None, f"{tool} produced no output"
-        return out, f"rendered with {tool}"
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return None, f"{tool} error: {e}"
+    errors = []
+    for tool in tools:
+        out.unlink(missing_ok=True)
+        try:
+            proc = subprocess.run(_argv(DIAGRAM_TOOLS[tool], file=mmd, out=out, fmt=fmt),
+                                  capture_output=True, text=True, timeout=60)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            errors.append(f"{tool}: {e}")
+            continue
+        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+            return out, f"rendered with {tool}"
+        errors.append(f"{tool}: {(proc.stderr or proc.stdout or 'no output').strip()[:160]}")
+    return None, " | ".join(errors)
+
+
+# --- built-in text view (no external renderer needed) -------------------------
+# Deliberately a *reading* of the graph, not a pixel replica: complex mermaid
+# syntax (styling, links, nested subgraphs) is ignored rather than guessed at.
+
+_NODE_RE = re.compile(
+    r'^\s*(?!subgraph\b|end\b|classDef\b|class\b|flowchart\b|graph\b|direction\b)'
+    r'([A-Za-z_][\w-]*)\s*(?:\[\(?|\(\[|\{|\(|\[)\s*"?(.*?)"?\s*(?:\)?\]|\]\)|\}|\)|\])'
+    r'\s*(?:[ \t]*:::[ \t]*([\w-]+))?\s*$'
+)
+_EDGE_RE = re.compile(
+    r'^\s*([A-Za-z_][\w-]*)\s*(?:-->|-\.->|==>|---|--)\s*(?:\|[^|]*\|\s*)?([A-Za-z_][\w-]*)\s*$'
+)
+_SUBGRAPH_RE = re.compile(r'^\s*subgraph\s+([\w-]+)\s*(?:\["?([^"\]]*)"?\])?')
+_GLYPH = {"done": "☑", "complete": "☑", "next": "▶", "working": "▶",
+          "gate": "◆", "cond": "◇", "todo": "○"}
+
+
+def _plain(label: str) -> str:
+    label = label.replace("<br/>", " · ").replace("<br>", " · ")
+    for a, b in (("&gt;", ">"), ("&lt;", "<"), ("&amp;", "&"), ("&quot;", '"')):
+        label = label.replace(a, b)
+    return label.strip()
+
+
+def parse_graph(src: str) -> dict:
+    nodes: dict[str, dict] = {}
+    edges: list[tuple[str, str]] = []
+    groups: list[tuple[str, list[str]]] = [("", [])]
+    for raw in src.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("%%"):
+            continue
+        if m := _SUBGRAPH_RE.match(line):
+            groups.append((_plain(m.group(2) or m.group(1)), []))
+            continue
+        if line == "end":
+            if len(groups) > 1:
+                groups.append(("", []))
+            continue
+        if m := _EDGE_RE.match(line):
+            edges.append((m.group(1), m.group(2)))
+            continue
+        if m := _NODE_RE.match(line):
+            node_id, label, cls = m.group(1), _plain(m.group(2)), m.group(3) or "todo"
+            nodes[node_id] = {"id": node_id, "label": label, "cls": cls}
+            groups[-1][1].append(node_id)
+    for a, b in edges:  # edges may declare nodes implicitly
+        for nid in (a, b):
+            nodes.setdefault(nid, {"id": nid, "label": nid, "cls": "todo"})
+    return {"nodes": nodes, "edges": edges, "groups": groups}
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+def render_text_graph(src: str, width: int = 88) -> str:
+    """Built-in ASCII view: groups → nodes (state glyph + label), then edges."""
+    g = parse_graph(src)
+    nodes, edges = g["nodes"], g["edges"]
+    if not nodes:
+        return ""
+    out = [f"{len(nodes)} nodes · {len(edges)} edges (built-in text view)"]
+    for title, ids in g["groups"]:
+        ids = [i for i in ids if i in nodes]
+        if not ids:
+            continue
+        if title:
+            out.append("")
+            out.append(ui.colorize(f"── {title}", ui.BOLD))
+        for nid in ids:
+            n = nodes[nid]
+            head = f"  {_GLYPH.get(n['cls'], '○')} {nid:5} "
+            wrapped = _wrap(n["label"], width - len(head))
+            out.append(head + wrapped[0])
+            out += [" " * len(head) + w for w in wrapped[1:]]
+    tails = [(a, b) for a, b in edges if a in nodes and b in nodes]
+    if tails:
+        out.append("")
+        out.append(ui.colorize("── flows", ui.BOLD))
+        by_src: dict[str, list[str]] = {}
+        for a, b in tails:
+            by_src.setdefault(a, []).append(b)
+        for a, targets in by_src.items():
+            out.append(f"  {a} → {', '.join(targets)}")
+    out.append("")
+    out.append(ui.colorize("  ☑ done · ▶ current/next · ◆ gate · ◇ conditional · ○ todo", ui.DIM))
+    return "\n".join(out)

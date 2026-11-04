@@ -52,6 +52,10 @@ class TaskStore:
             return {"version": 1, "project_slug": "", "current_phase": 0, "tasks": []}
         data.setdefault("tasks", [])
         data.setdefault("current_phase", 0)
+        for t in data["tasks"]:
+            if not isinstance(t.get("phase"), int):
+                m = re.search(r"\d+", str(t.get("phase", "")))
+                t["phase"] = int(m.group()) if m else 0
         return data
 
     def save(self, data: dict) -> None:
@@ -172,50 +176,103 @@ class TaskStore:
 
 # --- PLAN.md <-> tasks import -------------------------------------------------
 
-PLAN_STEP = re.compile(r"^###\s+(S\d+|T-\S+)\s*[—\-]\s*(.+)$", re.MULTILINE)
+# `### S04b — title` / `### S12 - title` / `### T-abc — title`
+PLAN_STEP = re.compile(r"^###\s+((?:S\d+[a-zA-Z]?|T-\S+))\s*[—–-]\s*(.+)$", re.MULTILINE)
+
+# Exit gate text per phase (SKILL.md §3) — shown by `rh phase`, never enforced alone.
+PHASE_EXIT = {
+    0: "ENV.md config block parses and the user confirmed it",
+    1: "PROBLEM.md has all six sections, user approved",
+    2: "ENV.md `## Environment` notes the tools/versions the user named",
+    3: "LITERATURE.md (+ OUTPUT_LAYOUT.md when the output is a paper/report), or a user-agreed skip",
+    4: "PLAN.md: both planners agreed + the user approved it",
+    5: "STATUS.md describes reality (phase, step, blockers, history)",
+    6: "plan steps checked, tests green, results/ reproduces from a clean run",
+    7: "zero open blocking questions from Critique",
+    8: "every claim has an evidence line, Critique signed off",
+    9: "all steps checked, close log written, push question answered",
+}
+
+
+def _step_blocks(text: str) -> list[tuple[str, str, str]]:
+    """[(step_id, title, body)] — a step's body ends at the next heading."""
+    starts = [(m.group(1), m.group(2).strip(), m.start(), m.end())
+              for m in PLAN_STEP.finditer(text)]
+    blocks = []
+    for i, (step_id, title, _start, body_start) in enumerate(starts):
+        end = starts[i + 1][2] if i + 1 < len(starts) else len(text)
+        nxt = re.search(r"^##\s", text[body_start:end], re.MULTILINE)
+        if nxt:
+            end = body_start + nxt.start()
+        blocks.append((step_id, title, text[body_start:end]))
+    return blocks
+
+
+def _field(body: str, pattern: str) -> str:
+    m = re.search(pattern, body)
+    return (m.group(1).strip().strip("`") if m else "")
+
+
+def parse_plan_steps(text: str, default_phase: int = 4) -> list[dict]:
+    """Parse PLAN.md steps (SKILL.md §8 template) into task dicts."""
+    out = []
+    for step_id, title, body in _step_blocks(text):
+        deps = _field(body, r"depends on:\s*([^|\n]+)")
+        out.append({
+            "id": step_id,
+            "title": title,
+            "owner": _field(body, r"owner:\s*([\w-]+)"),
+            "deliverable": (_field(body, r"deliverable:\s*`([^`]+)`")
+                            or _field(body, r"deliverable:\s*([^|\n]+)")),
+            "verify": _field(body, r"verify:\s*`([^`]+)`"),
+            "kind": _field(body, r"kind:\s*([\w-]+)"),
+            "timebox": _field(body, r"timebox:\s*(\S+)"),
+            "risk": _field(body, r"risk:\s*([^|\n]+)"),
+            "depends_on": [d.strip() for d in deps.split(",")
+                           if d.strip() and d.strip().lower() not in ("none", "-", "n/a")],
+            "phase": default_phase,
+        })
+    return out
 
 
 def import_plan_md(root: Path, dry_run: bool = False) -> list[dict]:
-    """Parse PLAN.md steps (SKILL.md §8 template) into tasks."""
+    """Parse PLAN.md steps into tasks; existing ids get their fields refreshed.
+
+    PLAN.md is the truth (SKILL.md §10 contract 3): a retired title must not
+    survive on the board. Task state/subtasks are never touched here.
+    """
     plan = paths.artifact_path(root, "PLAN.md")
     if not plan.exists():
         return []
-    text = plan.read_text(encoding="utf-8")
     store = TaskStore(root)
-    existing = {t["id"] for t in store.load()["tasks"]}
-    added = []
-    for m in PLAN_STEP.finditer(text):
-        step_id, title = m.group(1), m.group(2).strip()
-        if step_id in existing:
+    data = store.load()
+    existing = {t["id"]: t for t in data["tasks"]}
+    changed = []
+    for step in parse_plan_steps(plan.read_text(encoding="utf-8")):
+        step_id = step.pop("id")
+        task = existing.get(step_id)
+        if task is None:
+            if dry_run:
+                changed.append({"id": step_id, "title": step["title"], "action": "added"})
+            else:
+                task = store.add(step["title"], task_id=step_id, phase=step["phase"],
+                                 owner=step["owner"] or "researcher",
+                                 deliverable=step["deliverable"], verify=step["verify"],
+                                 kind=step["kind"] or "build", timebox=step["timebox"],
+                                 risk=step["risk"], depends_on=step["depends_on"])
+                existing[step_id] = task
+                data["tasks"].append(task)  # keep the snapshot we save at the end consistent
+                changed.append({"id": step_id, "title": task["title"], "action": "added"})
             continue
-        owner, deliverable, verify, kind, timebox = "researcher", "", "", "build", ""
-        owner_m = re.search(rf"###\s+{re.escape(step_id)}.*?owner:\s*(\w+)", text, re.DOTALL)
-        if owner_m:
-            owner = owner_m.group(1)
-        del_m = re.search(rf"###\s+{re.escape(step_id)}.*?deliverable:\s*(.+)", text)
-        if del_m:
-            deliverable = del_m.group(1).strip()
-        ver_m = re.search(rf"###\s+{re.escape(step_id)}.*?verify:\s*`([^`]+)`", text)
-        if ver_m:
-            verify = ver_m.group(1)
-        kind_m = re.search(rf"###\s+{re.escape(step_id)}.*?\|\s*(build|spike)", text)
-        if kind_m:
-            kind = kind_m.group(1)
-        tb_m = re.search(rf"###\s+{re.escape(step_id)}.*?timebox:\s*(\S+)", text)
-        if tb_m:
-            timebox = tb_m.group(1)
-        if dry_run:
-            added.append({"id": step_id, "title": title, "owner": owner})
-        else:
-            added.append(
-                store.add(
-                    title,
-                    task_id=step_id,
-                    owner=owner,
-                    deliverable=deliverable,
-                    verify=verify,
-                    kind=kind,
-                    timebox=timebox,
-                )
-            )
-    return added
+        updates = {k: v for k, v in step.items() if k != "phase" and v and task.get(k) != v}
+        if not updates:
+            continue
+        if not dry_run:
+            for k, v in updates.items():
+                task[k] = v
+            task["updated_at"] = now_iso()
+        changed.append({"id": step_id, "title": task["title"], "action": "updated",
+                        "fields": sorted(updates)})
+    if changed and not dry_run:
+        store.save(data)
+    return changed

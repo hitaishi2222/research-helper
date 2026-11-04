@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-helper"
+version = "0.1.0"
+description = "rh — orchestrate an AI research project end to end from the terminal"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Hitaishi V", email = "hitaishi2222@gmail.com" }]
+keywords = ["research", "cli", "orchestration", "agents", "skill", "literature"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Utilities",
+]
+dependencies = ["rich>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1"]
+
+[project.scripts]
+rh = "rh.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/hitaishi2222/research-helper"
+Repository = "https://github.com/hitaishi2222/research-helper"
+Issues = "https://github.com/hitaishi2222/research-helper/issues"
+Roadmap = "https://github.com/hitaishi2222/research-helper/blob/main/ROADMAP.md"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.package-data]
+rh = ["skills/research-helper/SKILL.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

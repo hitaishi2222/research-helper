@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.coverage
+.coverage.*
+
+# rh dogfood workspace (this repo uses rh on itself)
+.rh/
+ENV.md
+papers/
+results/
+.pi/

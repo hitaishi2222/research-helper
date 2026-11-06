@@ -63,6 +63,9 @@ rh env show                 # config as a table, validated
 rh phase 4                  # gated: refuses to skip unmet exits
 rh phase                    # what the current phase still needs
 rh describe                 # the map an agent reads
+rh resume --dry-run         # the exact command the orchestrator would start
+rh spawn researcher "implement S07 of PLAN.md"
+rh info PLAN.md             # what that file is for, its sections, its template
 ```
 
 The Orchestrator (your agent) interviews you for the environment and writes the
@@ -92,12 +95,38 @@ A tool on `PATH` does not mean this project should use it.
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
 | `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh plan import [--dry-run]` | mirror `PLAN.md` steps into `tasks.json` |
-| `rh resume` / `rh -r` | run the configured agent CLI in **this terminal** with a go-forward prompt |
+| `rh resume` / `rh -r` | run the orchestrator **in this terminal** — model + thinking level from `agents.roles.orchestrator`, command from `agents.commands.orchestrator`, only `agents.skills` loaded |
+| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/ENV.md`; `--inline`, `--dry-run`, `--prompt-file` |
+| `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
-| `rh describe [--json]` | the AI map: layout, phases, env keys, budget |
+| `rh describe [--json]` | the AI map: layout, phases, env keys, artifacts, spawn, budget |
 
 Global flags (before the subcommand): `--root DIR`, `--json`, `--version`.
 Every command supports `--json` for agent reads — never parse the pretty UI.
+
+---
+
+## Launching agents (nothing hardcoded)
+
+`rh` does not know any agent CLI's flags. The commands live in `.rh/ENV.md`, and
+`rh` substitutes placeholders into them:
+
+```bash
+rh env set \
+  'agents.roles.orchestrator={"provider":"pi","model":"glm-5","thinking":"high"}' \
+  'agents.commands.orchestrator=pi --model {model} --thinking {thinking} --skill {skills} --prompt-file {prompt_file}' \
+  'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
+rh resume            # → pi --model glm-5 --thinking high --skill research-helper …
+rh spawn researcher "read S07 and implement it"
+```
+
+Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {slug} {provider}
+{model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template that
+omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your ENV.md
+is not being honoured instead of guessing a flag. With no `agents.spawn` the agent
+is started as a detached process and its output goes to `.rh/logs/`.
+Ready-made scripts and per-role prompt templates live in [`examples/`](examples/README.md).
+
 
 ---
 
@@ -146,9 +175,11 @@ rh skill install
 What the skill adds:
 
 - **Roles** — Orchestrator (always the current runner), Literature, Researcher,
-  Reviewer, Critique, Writer, with a budget mapping for 1–4 parallel agents.
+  Reviewer, Critique, Writer, with a budget mapping for 1–4 parallel agents, and
+  `rh spawn <role>` to put one of them to work with the command from `ENV.md`.
 - **Gates** — user approves the plan, critique veto, "no result without a file".
-- **Templates** — `ENV.md`, `STATUS.md`, `OUTPUT_LAYOUT.md`, `PLAN.md` steps, logs.
+- **Templates** — `ENV.md`, `STATUS.md`, `OUTPUT_LAYOUT.md`, `PLAN.md` steps, logs —
+  the same descriptions `rh info <FILE>` prints, so an agent can check before writing.
 - **Reading discipline** — one layout, a pattern tally, DOI anchors, no paraphrasing
   unread papers.
 
@@ -171,6 +202,7 @@ pyproject.toml
 src/rh/                 the CLI package
 src/rh/skills/          the bundled skill (package data)
 tests/                  pytest smoke tests
+examples/               agent-facing spawn scripts + role prompt templates
 docs/IDEA.md            original design notes
 ROADMAP.md              where this is going
 ```

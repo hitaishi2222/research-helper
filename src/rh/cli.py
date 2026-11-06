@@ -13,6 +13,9 @@ Commands:
   rh workflow [--mermaid] [--write]
   rh phase [0-9]          # show the current phase + its exit gate, or set it (gated)
   rh plan import [--dry-run]
+  rh resume / rh -r       # exec the orchestrator (model + thinking from .rh/ENV.md) here
+  rh spawn <role> [prompt] ...   # open another role agent with the ENV.md command
+  rh info <FILE.md>       # what that artifact is for, who owns it, its sections
   rh skill install [--dest DIR] [--force]
   rh describe   # AI-friendly map: phases, layout, env schema (decisions you must surface)
 
@@ -22,10 +25,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 from pathlib import Path
 
-from . import __version__, add as add_mod, config, paths, resume as resume_mod, search as search_mod, tasks as tasks_mod, ui, workflow
+from . import __version__, config, paths, ui, workflow
+from . import add as add_mod
+from . import artifacts as artifacts_mod
+from . import resume as resume_mod
+from . import search as search_mod
+from . import spawn as spawn_mod
+from . import tasks as tasks_mod
 
 
 def with_root(fn):
@@ -68,9 +78,16 @@ def _env_value(value) -> str:
     if isinstance(value, dict):
         if not value:
             return "—"
-        if set(value) == {"provider", "model"}:
-            return f"{value['provider']}/{value['model']}"
+        if set(value) <= {"provider", "model", "thinking"}:
+            model = value.get("model") or ""
+            if not model:
+                return "—"
+            text = f"{value.get('provider')}/{model}" if value.get("provider") else str(model)
+            if value.get("thinking"):
+                text += f" (thinking: {value['thinking']})"
+            return text
         return json.dumps(value, sort_keys=True)
+
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, list):
@@ -122,6 +139,10 @@ def cmd_env_list(args, root: Path):
     rows = [[key, kind, " ".join(str(c) for c in choices) or "—", help_text]
             for key, kind, choices, help_text in config.ENV_SCHEMA]
     print(ui.table(["key", "kind", "choices", "help"], rows))
+    print()
+    print(ui.colorize("Also settable (any role name):", ui.DIM))
+    for _pattern, kind, label, help_text in config.ENV_PATTERNS:
+        print(f"  {ui.colorize(label, ui.CYAN)} ({kind}) — {help_text}")
     print(f"\n{ui.colorize('Set:', ui.DIM)} rh env set agents.count=2 agents.backend=tmux ...")
     return 0
 
@@ -135,6 +156,8 @@ def cmd_env_set(args, root: Path):
         print("Keys:")
         for key, kind, choices, _ in config.ENV_SCHEMA:
             print(f"  {key} ({kind}{choices})")
+        for _pattern, kind, label, help_text in config.ENV_PATTERNS:
+            print(f"  {label} ({kind}) — {help_text}")
         return 2
     for pair in args.pairs:
         if "=" not in pair:
@@ -142,7 +165,7 @@ def cmd_env_set(args, root: Path):
             continue
         key, raw = pair.split("=", 1)
         key = key.strip()
-        spec = next((s for s in config.ENV_SCHEMA if s[0] == key), None)
+        spec = config.schema_for(key)
         if spec is None:
             print(f"⚠ unknown key {key!r} — see `rh env list`", file=sys.stderr)
             continue
@@ -262,13 +285,15 @@ def cmd_tasks(args, root: Path):
         })
         return 0
     print(ui.banner("Tasks"))
-    print(f"{ui.bar(summary['pct'])}  {summary['complete']}/{summary['total']} complete · "
+    print(ui.phase_rail(current, done=gate["done"]))
+    print()
+    # one bar for the board — subtask counts show inline on each task row
+    print(f"{ui.bar(summary['pct'])}  {summary['complete']}/{summary['total']} tasks complete · "
           f"{summary['working']} working · {summary['idle']} idle")
     if summary["subtasks_total"]:
         sc = summary["subtasks_complete"]
         st = summary["subtasks_total"]
-        print(f"{ui.colorize('Subtasks:', ui.DIM)} {sc}/{st}  {ui.bar(round(100*sc/st), width=14)}")
-    print(ui.phase_rail(current, done=gate["done"]))
+        print(ui.colorize(f"Subtasks: {sc}/{st} complete", ui.DIM))
     print()
     if gate["problems"]:
         for p in gate["problems"]:
@@ -323,13 +348,7 @@ def cmd_status(args, root: Path):
         return 0
     slug = env.get("project", {}).get("slug") or "untitled"
     print(ui.banner(f"{slug} — status", str(root)))
-    # openspec status style: header line + progress + artifact checklist
     print(f"Project: {slug} · Phase: {tasks_mod.phase_name(summary['current_phase'])}")
-    print(f"Progress: {summary['complete']}/{summary['total']} steps complete  {ui.bar(summary['pct'], width=16)}")
-    print("Changes (task lanes):")
-    print(f"  [x] Draft (idle)      {len([t for t in store.list() if t['state']=='idle'])}")
-    print(f"  [~] Active (working)  {summary['working']}")
-    print(f"  [x] Complete          {summary['complete']}")
     print()
     if gate["problems"]:
         for p in gate["problems"]:
@@ -338,7 +357,9 @@ def cmd_status(args, root: Path):
         print()
     print(ui.phase_rail(summary["current_phase"], done=gate["done"]))
     print()
-    print(f"{ui.bar(summary['pct'], width=24)}  {summary['complete']}/{summary['total']} steps · "
+    # ONE overall progress line — the phase rail above already shows position,
+    # and the per-phase bars below show the breakdown, so no repeats here.
+    print(f"{ui.bar(summary['pct'], width=24)}  {summary['complete']}/{summary['total']} tasks · "
           f"{summary['working']} working · {summary['idle']} idle")
     print()
     # per-phase progress only — the task/subtask detail lives in `rh tasks`
@@ -347,15 +368,22 @@ def cmd_status(args, root: Path):
         by_phase.setdefault(t["phase"], []).append(t)
     if not by_phase:
         print(ui.colorize("No tasks — `rh plan import` will mirror PLAN.md steps here.", ui.DIM))
-    for phase in sorted(by_phase):
-        tasks = by_phase[phase]
-        done = sum(1 for t in tasks if t["state"] == "complete")
-        working = [t["id"] for t in tasks if t["state"] == "working"]
-        bar_pct = round(100 * done / len(tasks)) if tasks else 0
+    elif len(by_phase) == 1:
+        # one phase means a per-phase bar would just repeat the line above
+        only = next(iter(by_phase))
+        working = [t["id"] for t in by_phase[only] if t["state"] == "working"]
         now = f" · working: {', '.join(working)}" if working else ""
-        print(f"{ui.colorize(tasks_mod.phase_name(phase), ui.BOLD)}  {ui.bar(bar_pct, width=14)}  "
-              f"({done}/{len(tasks)}){now}")
-    if by_phase:
+        print(ui.colorize(f"all {len(by_phase[only])} tasks are in "
+                          f"{tasks_mod.phase_name(only)}{now} · detail: `rh tasks`", ui.DIM))
+    else:
+        for phase in sorted(by_phase):
+            phase_tasks = by_phase[phase]
+            done = sum(1 for t in phase_tasks if t["state"] == "complete")
+            working = [t["id"] for t in phase_tasks if t["state"] == "working"]
+            bar_pct = round(100 * done / len(phase_tasks)) if phase_tasks else 0
+            now = f" · working: {', '.join(working)}" if working else ""
+            print(f"{ui.colorize(tasks_mod.phase_name(phase), ui.BOLD)}  "
+                  f"{ui.bar(bar_pct, width=14)}  ({done}/{len(phase_tasks)}){now}")
         print(ui.colorize("  task + subtask detail: `rh tasks`", ui.DIM))
     return 0
 
@@ -560,6 +588,25 @@ def cmd_describe(args, root: Path):
             for k, kind, choices, h in config.ENV_SCHEMA
         ],
         "add_targets": list(add_mod.ADD_TARGETS),
+        "artifacts": [{"file": n, "phase": artifacts_mod.ARTIFACTS[n]["phase"],
+                       "owner": artifacts_mod.ARTIFACTS[n]["owner"],
+                       "purpose": artifacts_mod.ARTIFACTS[n]["purpose"]}
+                      for n in artifacts_mod.names()],
+        "info": {
+            "command": "rh info <FILE.md>",
+            "note": "one clean description per artifact (owner, phase, sections, template, "
+                    "rules) — read it before writing the file",
+        },
+        "spawn": {
+            "command": "rh spawn <role> \"<instructions>\" [--inline] [--dry-run]",
+            "roles": list(spawn_mod.ROLES),
+            "launch_template": "agents.commands.<role> (falls back to agents.commands.default)",
+            "window_template": "agents.spawn — how a parallel agent is opened; blank = "
+                               "detached process with a log in .rh/logs/",
+            "placeholders": list(spawn_mod.PLACEHOLDERS),
+            "spawn_placeholders": list(spawn_mod.SPAWN_PLACEHOLDERS),
+            "note": "rh never hardcodes a CLI flag: the commands live in .rh/ENV.md",
+        },
         "agent_budget": {
             "1": "Orchestrator wears all hats",
             "2": "Researcher separate",
@@ -582,6 +629,16 @@ def cmd_describe(args, root: Path):
     for e in info["env_keys"]:
         print(f"  {e['key']} ({e['kind']}{e['choices']}) — {e['help']}")
     print(f"\n{ui.colorize('Add targets:', ui.BOLD)} {info['add_targets']}")
+    print(f"\n{ui.colorize('Artifacts (rh info <FILE>):', ui.BOLD)}")
+    for a in info["artifacts"]:
+        name = ui.colorize(f"{a['file']:17}", ui.CYAN)
+        print(f"  {name} {a['phase']:22} {a['owner']}")
+    print(f"\n{ui.colorize('Spawning (commands come from .rh/ENV.md):', ui.BOLD)}")
+    print("  rh resume / rh -r       orchestrator here, model+thinking from "
+          "agents.roles.orchestrator")
+    print(f"  rh spawn <role> \"...\"   {', '.join(info['spawn']['roles'])}")
+    print(f"  placeholders: {', '.join('{' + p + '}' for p in info['spawn']['placeholders'])}"
+          f" (+ {{command}} in agents.spawn)")
     print(f"\n{ui.colorize('Agent budget:', ui.BOLD)}")
     for k, v in info["agent_budget"].items():
         print(f"  count={k} → {v}")
@@ -590,7 +647,7 @@ def cmd_describe(args, root: Path):
 
 @with_root
 def cmd_resume(args, root: Path):
-    """Run the agent harness in THIS terminal with a go-forward prompt (rh resume / rh -r)."""
+    """Run the Orchestrator in THIS terminal, using the command written in ENV.md."""
     # Cheap path check first: an agent must never be opened against the wrong project.
     if not paths.rh_dir(root).exists():
         print(ui.colorize(f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED), file=sys.stderr)
@@ -602,40 +659,229 @@ def cmd_resume(args, root: Path):
         print("  `rh env set KEY=VALUE ...` (see `rh env list`), then confirm ENV.md", file=sys.stderr)
         return 1
     dry = getattr(args, "dry_run", False)
-    agent_cli, cli_changed = resume_mod.resolve_agent_cli(
-        getattr(args, "cli", None), env, interactive=not dry and resume_mod.is_interactive())
-    if not agent_cli:
-        print(ui.colorize("✗ no agent CLI found — nothing to spawn", ui.RED), file=sys.stderr)
-        return 1
-    # persist the pick so the next resume is zero-touch
-    if cli_changed:
-        env.setdefault("agents", {})
-        env["agents"]["cli"] = agent_cli
-        config.save_env(root, env)
-        print(ui.colorize(f"✓ saved to {paths.env_md(root)}: agents.cli={agent_cli}", ui.GREEN))
     store = tasks_mod.TaskStore(root)
-    prompt = resume_mod.build_prompt(root, env, gate, store, extra=getattr(args, "prompt", None) or "")
+    extra = getattr(args, "prompt", None) or ""
+    if getattr(args, "prompt_file", None):
+        try:
+            text = Path(args.prompt_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(ui.colorize(f"✗ cannot read {args.prompt_file}: {exc}", ui.RED), file=sys.stderr)
+            return 1
+        extra = f"{extra}\n{text}".strip() if extra else text
+    prompt = resume_mod.build_prompt(root, env, gate, store, extra=extra)
     prompt_file = paths.rh_dir(root) / "resume-prompt.md"
     prompt_file.parent.mkdir(parents=True, exist_ok=True)
     prompt_file.write_text(prompt + "\n", encoding="utf-8")
     slug = env.get("project", {}).get("slug") or "untitled"
+
+    # The launch command (model + thinking level included) is written in ENV.md's
+    # agents.commands.orchestrator. Only when no command template exists at all do
+    # we fall back to picking a bare binary — and then we persist it.
+    plan = spawn_mod.launch_plan(root, env, "orchestrator", prompt, prompt_file)
+    if plan["argv"] is None and not dry:
+        agent_cli, cli_changed = resume_mod.resolve_agent_cli(
+            getattr(args, "cli", None), env, interactive=resume_mod.is_interactive())
+        if not agent_cli:
+            if plan.get("error"):
+                print(ui.colorize(f"✗ {plan['error']}", ui.RED), file=sys.stderr)
+            print(ui.colorize("✗ no agent CLI found — nothing to spawn", ui.RED), file=sys.stderr)
+            print(ui.colorize("  add the launch command to ENV.md: rh env set "
+                              "agents.commands.orchestrator='pi --model {model} --thinking {thinking}'",
+                              ui.DIM), file=sys.stderr)
+            return 1
+        if cli_changed:
+            env.setdefault("agents", {})["cli"] = agent_cli
+            config.save_env(root, env)
+            print(ui.colorize(f"✓ saved to {paths.env_md(root)}: agents.cli={agent_cli}", ui.GREEN))
+        plan = spawn_mod.launch_plan(root, env, "orchestrator", prompt, prompt_file)
+    if plan["argv"] is None:
+        if plan.get("error"):
+            print(ui.colorize(f"✗ {plan['error']}", ui.RED), file=sys.stderr)
+        for note in plan["notes"]:
+            print(ui.colorize(f"⚠ {note}", ui.YELLOW), file=sys.stderr)
+        return 1
+
     if getattr(args, "json", False):
         ui.json_out({
-            "root": str(root), "agent_cli": agent_cli,
+            "root": str(root), "role": "orchestrator", "argv": plan["argv"],
+            "command": shlex.join(plan["argv"]), "source": plan["source"],
             "prompt_file": str(prompt_file), "prompt": prompt,
-            "gate": gate, "spawned": False, "inline": True,
+            "model": plan["model"], "provider": plan["provider"],
+            "thinking": plan["thinking"], "skills": plan["skills"],
+            "notes": plan["notes"], "error": plan.get("error", ""),
+            "gate": gate,
+            "spawned": False, "inline": True,
         })
         return 0
-    print(ui.banner(f"rh resume — {slug}", f"project: {root} · agent: {agent_cli} (this terminal)"))
+    model = (f"{plan['provider']}/{plan['model']}" if plan["provider"] and plan["model"]
+             else plan["model"]) or "ENV.md default"
+    if plan["thinking"]:
+        model += f" · thinking {plan['thinking']}"
+    print(ui.banner(f"rh resume — {slug}", f"project: {root} · this terminal"))
+    print(f"{ui.colorize('model:', ui.DIM)} {model}"
+          f"  {ui.colorize('skills:', ui.DIM)} {', '.join(plan['skills']) or '—'}")
+    print(f"{ui.colorize('command:', ui.DIM)} {shlex.join(plan['argv'])}")
+    for note in plan["notes"]:
+        print(ui.colorize(f"⚠ {note}", ui.YELLOW))
+    print()
     print(prompt)
     if dry:
         return 0
     print()
-    _started, detail = resume_mod.exec_inline(root, agent_cli, prompt)
+    _started, detail = spawn_mod.exec_argv(root, plan["argv"])
     # exec replaces this process; reaching here means it could not start
     print(ui.colorize(f"✗ {detail}", ui.RED), file=sys.stderr)
     print(ui.colorize(f"  prompt ready at {prompt_file}", ui.DIM), file=sys.stderr)
     return 1
+
+
+@with_root
+def cmd_spawn(args, root: Path):
+    """`rh spawn <role> [instructions]` — open another role agent with the ENV.md command."""
+    if not paths.rh_dir(root).exists():
+        print(ui.colorize(f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED), file=sys.stderr)
+        return 1
+    env = config.load_env(root)
+    role = (args.agent or "").strip().lower()
+    if not role:
+        print("✗ which role? " + " | ".join(spawn_mod.ROLES), file=sys.stderr)
+        return 2
+    commands = (env.get("agents") or {}).get("commands") or {}
+    known = set(spawn_mod.ROLES) | ({str(k).lower() for k in commands} if isinstance(commands, dict) else set())
+    if role not in known:
+        print(ui.colorize(f"✗ unknown role {role!r} — roles: {', '.join(spawn_mod.ROLES)}", ui.RED),
+              file=sys.stderr)
+        print(ui.colorize(f"  define your own: rh env set agents.commands.{role}='pi --model {{model}}'",
+                          ui.DIM), file=sys.stderr)
+        return 2
+    extra = " ".join(getattr(args, "text", None) or []).strip()
+    if getattr(args, "prompt", None):
+        extra = f"{extra}\n{args.prompt}".strip() if extra else args.prompt
+    if getattr(args, "prompt_file", None):
+        try:
+            text = Path(args.prompt_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(ui.colorize(f"✗ cannot read {args.prompt_file}: {exc}", ui.RED), file=sys.stderr)
+            return 1
+        extra = f"{extra}\n{text}".strip() if extra else text
+    slug = env.get("project", {}).get("slug") or "untitled"
+    store = tasks_mod.TaskStore(root)
+    prompt = spawn_mod.build_role_prompt(root, env, role, store, extra=extra)
+    prompt_file = paths.rh_dir(root) / "tmp" / f"spawn-{add_mod.slugify(role)}-prompt.md"
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text(prompt + "\n", encoding="utf-8")
+    plan = spawn_mod.launch_plan(root, env, role, prompt, prompt_file)
+    if plan["argv"] is None:
+        if plan.get("error"):
+            print(ui.colorize(f"✗ {plan['error']}", ui.RED), file=sys.stderr)
+        for note in plan["notes"]:
+            print(ui.colorize(f"⚠ {note}", ui.YELLOW), file=sys.stderr)
+        return 1
+    preview = spawn_mod.spawn_preview(root, env, role, plan)
+    notes = plan["notes"] + preview["notes"]
+    if getattr(args, "json", False):
+        ui.json_out({
+            "root": str(root), "role": role, "argv": plan["argv"],
+            "command": preview["command"], "mode": preview["mode"],
+            "log": preview["log"], "source": plan["source"],
+            "prompt_file": str(prompt_file), "prompt": prompt,
+            "model": plan["model"], "provider": plan["provider"],
+            "thinking": plan["thinking"], "skills": plan["skills"],
+            "agents_count": (env.get("agents") or {}).get("count"),
+            "notes": notes, "error": plan.get("error", ""), "spawned": False,
+        })
+        return 0
+    model = (f"{plan['provider']}/{plan['model']}" if plan["provider"] and plan["model"]
+             else plan["model"]) or "ENV.md default"
+    if plan["thinking"]:
+        model += f" · thinking {plan['thinking']}"
+    print(ui.banner(f"rh spawn — {role}", f"project: {root} · {slug}"))
+    print(f"{ui.colorize('model:', ui.DIM)} {model}"
+          f"  {ui.colorize('skills:', ui.DIM)} {', '.join(plan['skills']) or '—'}"
+          f"  {ui.colorize('agents.count:', ui.DIM)} {(env.get('agents') or {}).get('count')}")
+    print(f"{ui.colorize('mode:', ui.DIM)} {preview['mode']}"
+          f"  {ui.colorize('via', ui.DIM)} {plan['source'] or 'agents.cli'}")
+    print(f"{ui.colorize('command:', ui.DIM)} {preview['command']}")
+    if preview["log"]:
+        print(f"{ui.colorize('log:', ui.DIM)} {preview['log']}")
+    for note in notes:
+        print(ui.colorize(f"⚠ {note}", ui.YELLOW))
+    print(f"{ui.colorize('prompt:', ui.DIM)} {prompt_file}")
+    if getattr(args, "dry_run", False):
+        print()
+        print(prompt)
+        return 0
+    print()
+    if getattr(args, "inline", False):
+        _started, detail = spawn_mod.exec_argv(root, plan["argv"])
+        print(ui.colorize(f"✗ {detail}", ui.RED), file=sys.stderr)
+        print(ui.colorize(f"  prompt ready at {prompt_file}", ui.DIM), file=sys.stderr)
+        return 1
+    result = spawn_mod.spawn_now(root, env, role, plan)
+    if result["mode"] == "pane":
+        ok = result.get("returncode", 0) == 0
+        print(ui.colorize(("✓ opened pane via agents.spawn" if ok
+                           else "⚠ the agents.spawn command failed") +
+                          f" ({result['command']})", ui.GREEN if ok else ui.YELLOW))
+    else:
+        print(ui.colorize(f"✓ started pid {result.get('pid')} → {result['log']}", ui.GREEN))
+    print(ui.colorize("  record the spawn in STATUS.md; close it when the job is done (rules 12–13).", ui.DIM))
+    return 0
+
+
+def _short(text: str, limit: int = 88) -> str:
+    """First sentence of a purpose, trimmed — for one-line tables."""
+    sentence = text.split(". ")[0].rstrip(".")
+    return sentence if len(sentence) <= limit else sentence[: limit - 1].rstrip() + "…"
+
+
+@with_root
+def cmd_info(args, root: Path):
+    """`rh info [FILE]` — what that artifact is for, who owns it, its sections."""
+    names = artifacts_mod.names()
+    if not args.name:
+        if getattr(args, "json", False):
+            ui.json_out([{"file": n, "phase": artifacts_mod.ARTIFACTS[n]["phase"],
+                          "owner": artifacts_mod.ARTIFACTS[n]["owner"],
+                          "purpose": artifacts_mod.ARTIFACTS[n]["purpose"]} for n in names])
+            return 0
+        print(ui.banner("Artifacts", "rh info <FILE.md> for the full description"))
+        rows = [[n, artifacts_mod.ARTIFACTS[n]["phase"], artifacts_mod.ARTIFACTS[n]["owner"],
+                 _short(artifacts_mod.ARTIFACTS[n]["purpose"])] for n in names]
+        print(ui.table(["file", "phase", "owner", "what it is"], rows))
+        return 0
+    key = artifacts_mod.resolve(args.name)
+    if key is None:
+        print(ui.colorize(f"✗ unknown artifact {args.name!r} — known: {', '.join(names)}", ui.RED),
+              file=sys.stderr)
+        return 1
+    spec = artifacts_mod.ARTIFACTS[key]
+    path = paths.artifact_path(root, key)
+    exists = path.exists()
+    if getattr(args, "json", False):
+        ui.json_out({"file": key, "path": str(path), "exists": exists, **spec})
+        return 0
+    if getattr(args, "template", False):
+        print(spec["template"])
+        return 0
+    print(ui.banner(key, f"{spec['phase']} · owner: {spec['owner']}"))
+    print(spec["purpose"])
+    print()
+    print(f"{ui.colorize('location:', ui.DIM)} {spec['location']}"
+          f"  {ui.colorize('now:', ui.DIM)} {path} ({'exists' if exists else 'not created yet'})")
+    print(f"{ui.colorize('consumers:', ui.DIM)} {spec['consumers']}")
+    print()
+    print(ui.colorize("Sections it must have:", ui.BOLD))
+    for section in spec["sections"]:
+        print(f"  - {section}")
+    print()
+    print(ui.colorize("Rules that bite here:", ui.BOLD))
+    for rule in spec["rules"]:
+        print(f"  - {rule}")
+    print()
+    print(ui.colorize(f"Template (`rh info {key} --template`):", ui.BOLD))
+    print(spec["template"])
+    return 0
 
 
 def cmd_skill_install(args):
@@ -739,11 +985,31 @@ def build_parser():
     s = sub.add_parser("describe", help="AI map of the tool", parents=[common])
     s.set_defaults(func=cmd_describe)
 
-    s = sub.add_parser("resume", help="spawn a configured harness with a go-forward prompt", parents=[common])
-    s.add_argument("--cli", dest="cli", default=None, help="agent binary, e.g. opencode (default: config agents.cli, else ask)")
+    s = sub.add_parser("resume", help="run the orchestrator here (model + thinking from .rh/ENV.md)", parents=[common])
+    s.add_argument("--cli", dest="cli", default=None, help="fallback agent binary when ENV.md has no agents.commands (default: config agents.cli, else ask)")
     s.add_argument("--prompt", default=None, help="extra user instructions appended to the go-forward prompt")
-    s.add_argument("--dry-run", action="store_true", help="show prompt + choices without spawning")
+    s.add_argument("--prompt-file", dest="prompt_file", default=None,
+                   help="read the extra instructions from a markdown file (examples/prompts/orchestrator.md)")
+    s.add_argument("--dry-run", action="store_true", help="show the resolved command + prompt without spawning")
     s.set_defaults(func=cmd_resume)
+
+    s = sub.add_parser("spawn", help="open another role agent with the launch command from .rh/ENV.md",
+                       parents=[common])
+    s.add_argument("agent", help="role: orchestrator | literature | researcher | reviewer | critique | writer, "
+                                "or any agents.commands.<role> key")
+    s.add_argument("text", nargs="*", help="instructions for that agent (joined into one prompt)")
+    s.add_argument("--prompt", default=None, help="instructions instead of the positional form")
+    s.add_argument("--prompt-file", dest="prompt_file", default=None,
+                   help="read the instructions from a markdown file (examples/prompts/*.md)")
+    s.add_argument("--inline", action="store_true", help="run the agent in this terminal instead of a new pane/process")
+    s.add_argument("--dry-run", action="store_true", help="print the command + role prompt without starting anything")
+    s.set_defaults(func=cmd_spawn)
+
+    s = sub.add_parser("info", help="describe an artifact: what it is for, owner, sections, template",
+                       parents=[common])
+    s.add_argument("name", nargs="?", default=None, help="file name, e.g. PLAN.md | status | .rh/GAPS.md")
+    s.add_argument("--template", action="store_true", help="print only the template block")
+    s.set_defaults(func=cmd_info)
 
     s = sub.add_parser("skill", help="install the bundled agent skill", parents=[common])
     ssub = s.add_subparsers(dest="sk", required=True)
@@ -755,7 +1021,8 @@ def build_parser():
     return p
 
 
-KNOWN_CMDS = {"init", "env", "add", "search", "tasks", "status", "workflow", "phase", "plan", "describe", "resume", "skill"}
+KNOWN_CMDS = {"init", "env", "add", "search", "tasks", "status", "workflow", "phase", "plan",
+              "describe", "resume", "spawn", "info", "skill"}
 
 
 def main(argv=None) -> int:

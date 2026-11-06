@@ -4,6 +4,62 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+Delegation, config honesty and artifact documentation (from the ISSUES list).
+
+### Added
+
+- **`rh spawn <role> [prompt]`** — open one role agent (`literature`,
+  `researcher`, `reviewer`, `critique`, `writer`, or any role you define) with
+  the launch command written in `.rh/ENV.md`. It appends the role contract
+  (owns / may / may-not, its board tasks with deliverable + verify, the artifacts
+  it owns) and opens it through `agents.spawn` (tmux/herdr/tuios pane) or as a
+  detached process logging to `.rh/logs/`. Flags: `--prompt`, `--prompt-file`,
+  `--inline`, `--dry-run`, `--json`.
+- **`rh info [FILE.md]`** — one clean description per artifact: purpose, owner,
+  phase, required sections, template and the rules that bite there. Accepts
+  `status`, `STATUS`, `.rh/STATUS.md`; `--template` prints just the template,
+  `--json` for agents, no argument lists every artifact.
+- **`agents.commands.<role>`** and **`agents.spawn`** config keys: `rh` hardcodes
+  no agent flag. Templates take `{model}` `{thinking}` `{skills}` `{prompt}`
+  `{prompt_file}` `{root}` `{slug}` `{role}` (and `{command}` in
+  `agents.spawn`); a placeholder with an empty value drops the flag that
+  introduced it. Any role name is settable: `rh env set
+  agents.commands.<role>=…`, `rh env set agents.roles.<role>.model=…`.
+- **`thinking`** level per role: `agents.roles.<role>` now takes
+  `{provider, model, thinking}`, shown as `pi/glm-5 (thinking: high)`.
+- `rh resume --prompt-file FILE` for this session's instructions.
+- `examples/` — starter scripts (`configure-env.sh`, `spawn-researcher.sh`,
+  `spawn-critique.sh`) and per-role prompt templates with `{{PLACEHOLDER}}`s, so
+  an agent (or a user) can see how commands, roles, tasks and prompts fit.
+
+### Changed
+
+- **`rh resume` now starts the session `.rh/ENV.md` describes**: command from
+  `agents.commands.orchestrator`, model + thinking level from
+  `agents.roles.orchestrator`, and only the `agents.skills` list loaded (fewer
+  skills, smaller context). It prints the model, skills and the exact command
+  before exec'ing, and `--dry-run`/`--json` return them without spawning. When
+  the command template omits `{model}`, `{thinking}` or `{skills}`, `rh` warns
+  that the ENV.md settings are not being honoured instead of guessing a flag.
+- `rh resume`/`rh spawn` prompts list the allowed skills explicitly and point at
+  `rh info <FILE>` and `rh spawn` for delegation.
+- The `agents.cli` fallback survives only for projects with no command template:
+  `rh resume` asks for a binary, persists it and warns that model/thinking/skills
+  are not passed.
+
+### Fixed
+
+- **Duplicate progress bars.** `rh status` printed the same completion twice (a
+  `Progress:` line plus the bar under the phase rail) and repeated the counts in
+  an openspec-style lane block, where idle tasks also rendered as `[x]`. Now:
+  one rail, one progress line, then the per-phase breakdown.
+- `rh tasks` printed a second bar for subtasks; the subtask count is now a line
+  and each task row already carries `[done/total subtasks]`.
+- `rh describe` reports the artifacts, `rh info`, and the spawn commands/
+  placeholders so an agent can find them without reading the source.
+
 ## [0.1.1] — 2026-11-04
 
 Config, orchestration and task-board cleanup driven by real-project use

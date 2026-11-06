@@ -10,7 +10,6 @@ it. Parallel agents spawned later by the Orchestrator are its own business
 """
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -58,17 +57,32 @@ def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str
     slug = env.get("project", {}).get("slug") or "untitled"
     agents = env.get("agents", {}) or {}
     skills = agents.get("skills") or ["research-helper"]
+    orch = (agents.get("roles") or {}).get("orchestrator") or {}
+    if not isinstance(orch, dict):
+        orch = {}
+    model = str(orch.get("model") or "")
+    provider = str(orch.get("provider") or "")
+    thinking = str(orch.get("thinking") or "")
+    session = (f"{provider}/{model}" if provider and model else model) or "not set in .rh/ENV.md"
+    if thinking:
+        session += f" · thinking: {thinking}"
     current = gate["phase"]
     lines = [
         f"You are the Orchestrator for the research project '{slug}'.",
         f"Project root (verify you are here before writing anything): {root}",
+        f"Session model (agents.roles.orchestrator): {session}",
         "",
-        f"Read these skills first, in this order: {', '.join(skills)}",
+        "Load exactly these skills for this session, and no others — nothing else,",
+        "so the context stays small and the pipeline stays authoritative:",
+    ]
+    lines += [f"  - {s}" for s in skills]
+    lines += [
         "Then follow the research-helper skill exactly — it is law, not advice",
         "(SKILL.md §0 non-negotiables; ask before every state-changing action).",
         "",
         f"Current phase: {phase_name(current)}",
     ]
+
     if gate["problems"]:
         lines.append("Unmet gates (resolve these first, or ask the user to waive):")
         lines += [f"  - {p}" for p in gate["problems"]]
@@ -86,31 +100,18 @@ def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str
         f"  - {paths.env_md(root)} (config block + environment notes)",
         f"  - {paths.artifact_path(root, 'STATUS.md')}" if paths.artifact_path(root, "STATUS.md").exists()
         else "  - STATUS.md (does not exist yet — create it in phase 5, not before)",
+        "  - `rh info <FILE.md>` describes any artifact before you write it",
         "",
         "Then continue the pipeline from the current phase. Do not skip exit gates;",
         "do not pick models (they live in the ENV.md config block).",
         "You own STATUS.md — update it yourself after every step; never delegate that.",
+        "",
+        "To put another role to work, use the launch commands from .rh/ENV.md:",
+        "  rh spawn <role> \"<instructions>\"      # literature | researcher | reviewer | critique | writer",
     ]
     if extra:
         lines += ["", "User instructions for this session:", extra]
     return "\n".join(lines)
-
-
-def exec_inline(root: Path, agent_cli: str, prompt: str) -> tuple[bool, str]:
-    """Replace this process with the agent, in the terminal the user called from.
-
-    Returns (False, detail) only when the exec could not start; on success rh is
-    gone (the agent owns the terminal) and the return value is never seen.
-    """
-    root = root.resolve()
-    if not (root / paths.RH_DIR).is_dir():
-        return False, f"{root} has no .rh/ — refusing to open an agent in the wrong project"
-    os.chdir(root)
-    try:
-        os.execvp(agent_cli, [agent_cli, prompt])
-    except OSError as e:
-        return False, f"{agent_cli} could not start: {e}"
-    return False, "unreachable"  # pragma: no cover
 
 
 def resolve_agent_cli(args_cli: str | None, env: dict, *, interactive: bool = True) -> tuple[str | None, bool]:

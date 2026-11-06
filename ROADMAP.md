@@ -46,9 +46,16 @@ A research project should be reproducible from its files alone:
 
 ## v0.3 — Orchestration
 
-The CLI currently prepares the harness; the agent still opens it by hand.
+The CLI now both prepares and opens the harness: `rh resume` runs the Orchestrator
+with the model/thinking/skills from ENV.md, and `rh spawn <role>` opens any other
+role agent with the command written there.
 
-- [ ] `rh agent spawn <role>` — tmux/herdr/tuios pane, roster recorded in `STATUS.md`
+- [x] `rh spawn <role>` — pane via `agents.spawn`, or a detached process with a log
+  in `.rh/logs/`; role contract + its board tasks appended to the prompt
+- [x] `rh info <FILE.md>` — purpose / owner / phase / sections / template per artifact
+- [x] `rh resume` honours `agents.roles.orchestrator` (model + thinking) and
+      `agents.commands.orchestrator`, loading only `agents.skills`
+- [x] `examples/` — starter spawn scripts + per-role prompt templates
 - [ ] `rh agent status` — who is running, on which model, in which pane
 - [ ] `rh plan vote` — collect the two planner candidates and the merged diff
 - [ ] `rh gate check` — machine-readable gate report for agents (`--json`)

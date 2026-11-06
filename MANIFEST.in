@@ -1,0 +1,7 @@
+# sdist extras — the docs and the agent-facing examples ship with the source
+# distribution so `pip download rh-cli --no-binary :all:` gets them too.
+include README.md
+include CHANGELOG.md
+include ROADMAP.md
+include LICENSE
+recursive-include examples *.md *.sh

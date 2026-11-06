@@ -76,6 +76,10 @@ Artifacts are created on first write, in the phase that first needs them. If a p
 skipped with the user's agreement, its artifact simply never exists — that is allowed;
 an empty file is not.
 
+Before writing any artifact, run `rh info <FILE.md>`: it prints that file's purpose, owner,
+phase, the sections it must have, the template to follow and the rules that bite there — so
+no agent has to guess (and a user can read the same description).
+
 The `rh` CLI (§10) keeps a machine-readable mirror of this state under `.rh/`
 (`ENV.md`, `env.json`, `tasks.json`, `logs/`, `notes/`, `workflow.mmd`) — the
 artifacts above remain the truth; `.rh/` is derived display state, with the two
@@ -104,14 +108,26 @@ installed on the machine. A binary on PATH does not mean this project should use
     "cli": "pi", // the agent binary this project runs (rh resume execs it)
     "skills": ["research-helper"], // skills every spawned agent must read first
     "roles": {
-      // provider+model per role; the Orchestrator slot must be
-      "orchestrator": {}, //   the model actually running this session
-      "literature": {},
+      // provider+model(+thinking) per role; the Orchestrator slot must be
+      "orchestrator": { "provider": "pi", "model": "<model>", "thinking": "high" },
+      "literature": {}, //   the model actually running this session
       "researcher": {},
       "reviewer": {},
       "critique": {},
       "writer": {},
     },
+    "commands": {
+      // how an agent CLI is STARTED — asked for, never invented. rh substitutes
+      // the placeholders below; every {model} {thinking} {skills} {prompt}
+      // {prompt_file} {root} {slug} {role} must be written by the user/you.
+      "orchestrator": "pi --model {model} --thinking {thinking} --skill {skills} --prompt-file {prompt_file}",
+      "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --prompt-file {prompt_file}",
+      "default": "", //  used for any role without its own command
+    },
+    "spawn": "tmux new-window -n rh-{agent} -c {root} {command}", // how `rh spawn`
+    //   opens a parallel agent ({command} = the launch command, shell-quoted);
+    //   empty = start it detached and log to .rh/logs/
+
     "planners": {
       // the two independent planners in phase 4
       "models": [{}, {}], // must be different models
@@ -137,10 +153,13 @@ installed on the machine. A binary on PATH does not mean this project should use
 
 Interview order (batch 2–3 unrelated keys per question; show the resulting block before
 moving on): project root → slug → **how many parallel agents the user wants for planning and
-research (1..4)** → backend → agent CLI → skills to read → per-role models → planner models →
-search/browse tool → reference manager → reading method → paywall policy → git → confirm
-gates. The root is never stored: it is the directory `.rh/ENV.md` sits in, and `.rh/` is
-what needs verifying before any agent is opened (rule 12).
+research (1..4)** → backend → agent CLI → **the exact launch command for that CLI** (model,
+thinking level, how a skill is selected; write `{model}` `{thinking}` `{skills}` `{prompt}`
+wherever the flag goes) → the command that opens a pane (`agents.spawn`) → skills to read →
+per-role models (+ thinking level) → planner models → search/browse tool → reference manager →
+reading method → paywall policy → git → confirm gates. The root is never stored: it is the
+directory `.rh/ENV.md` sits in, and `.rh/` is what needs verifying before any agent is opened
+(rule 12).
 
 ---
 
@@ -347,13 +366,20 @@ Critique gets its own agent from count 3 up because veto power needs an independ
 When a hat's work would be reviewed by the same context that did the work, say so in
 `STATUS.md` — the user must know a review was not independent.
 
-Spawn agents with `agents.backend` (`tmux new-window`, `herdr`, `tuios`; see those skills).
+Spawn agents with `rh spawn <role> "<instructions>"` (or `--prompt-file`). The launch
+command, its model, its thinking level and its skill selection all come from
+`agents.commands.<role>` in `.rh/ENV.md`; `rh spawn` appends the role contract (what the
+role owns, may and may not do, its board tasks, its artifacts) and opens it with
+`agents.spawn`. Preview first with `rh spawn <role> … --dry-run`; if `rh` warns that
+`{model}`, `{thinking}` or `{skills}` is missing from the template, fix the ENV.md command
+with the user instead of accepting the harness default.
 Before spawning, resolve and print the project path and check `.rh/ENV.md` is there (rule 12);
 record each spawn in `STATUS.md`. Confirm count and models with the user before spawning if
 anything differs from the `.rh/ENV.md` config block. When the job is done, close the agent's
 pane/window/tab and record the close with the same care (rule 13). `rh resume` always runs the
 Orchestrator in the terminal the user called it from — spawning panes is the Orchestrator's
-own work, not the resume command's.
+own work, not the resume command's. `examples/` in the `rh` repo carries starter scripts and
+per-role prompt templates with `{{PLACEHOLDER}}`s to copy.
 
 ---
 
@@ -502,7 +528,9 @@ Commands agents use per phase:
 | `rh add task / plan import` | 4–6 | mirrors PLAN.md steps into the board (`rh plan import`) |
 | `rh tasks set <id> idle\|working\|complete` | 5–6 | board state (subtask ids work too); `rh tasks` shows every task, subtask and status |
 | `rh phase` / `rh phase N` | any | no argument: the current phase and its exit gate. With N: **gated** advance, refusing unmet gates; `--force` is a waiver → record it in STATUS.md (rule 11) |
-| `rh resume` / `rh -r` | any | execs the configured agent CLI **in this terminal** as the Orchestrator with a go-forward prompt (skills loaded from `agents.skills`). Spawning extra panes is the Orchestrator's job (§5) |
+| `rh resume` / `rh -r` | any | execs the Orchestrator **in this terminal**: command from `agents.commands.orchestrator`, model + thinking level from `agents.roles.orchestrator`, only `agents.skills` loaded, `--prompt-file` for this session's instructions. `--dry-run` prints the exact command |
+| `rh spawn <role> [prompt]` | any | opens another role agent with `agents.commands.<role>` + `agents.spawn`; adds the role contract and its board tasks; `--dry-run`, `--inline`, `--prompt-file` |
+| `rh info [FILE.md]` | any | what an artifact is for: owner, phase, required sections, template, rules. Read it before writing any artifact |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd` as ASCII (renderer-dependent); `--tools` lists renderers; `--example` prints a starter source |
 
 Contracts that keep the two layers consistent:
@@ -530,12 +558,24 @@ Contracts that keep the two layers consistent:
    for `rh tasks`.
 
 4. **Same-terminal resume, explicit agent spawning.** `rh resume` never opens a
-   new pane or workspace: it execs the agent where the user typed the command.
-   Any parallel agent window is created by the Orchestrator, with the path check
-   of rule 12 and the close of rule 13.
+   new pane or workspace: it execs the agent where the user typed the command,
+   with the command written in `agents.commands.orchestrator`. `rh spawn` opens
+   one role agent — via `agents.spawn` when set, otherwise as a detached process
+   logging to `.rh/logs/` — with the path check of rule 12 and the close of
+   rule 13.
 
 5. **`workflow` prefers the installed renderer.** `bm` (beautiful-mermaid CLI) is
    first in the priority list, then `mermaid-ascii`, `mermansi`, `mermaid2term`,
    `merx`, `ma`; when none fits the terminal, the CLI falls back to its built-in
    compact text view rather than printing a 300-column canvas.
 6. **`--json` works on every command** for agent reads; never parse the pretty UI.
+
+7. **Launch commands are configuration, not code.** `rh` hardcodes no agent
+   flag: `agents.commands.<role>` and `agents.spawn` in `.rh/ENV.md` are the
+   source, and `rh` only substitutes `{model}` `{thinking}` `{skills}` `{prompt}`
+   `{prompt_file}` `{root}` `{slug}` `{role}` (`{command}` in `agents.spawn`).
+   A template that leaves `{model}`, `{thinking}` or `{skills}` out still runs,
+   but `rh resume`/`rh spawn` say so in their notes — that warning means the
+   session is not the one the ENV.md promised, so fix the command with the user.
+   Only `agents.skills` may be loaded: fewer skills, smaller context, and the
+   skill stays authoritative.

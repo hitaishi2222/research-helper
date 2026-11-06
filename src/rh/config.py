@@ -27,6 +27,18 @@ DEFAULT_ENV: dict = {
             "critique": {},
             "writer": {},
         },
+        # How an agent CLI is started — written by the user/Orchestrator in ENV.md.
+        # `rh` never hardcodes a flag: it only substitutes placeholders.
+        "commands": {
+            "default": "",
+            "orchestrator": "",
+            "literature": "",
+            "researcher": "",
+            "reviewer": "",
+            "critique": "",
+            "writer": "",
+        },
+        "spawn": "",  # how `rh spawn` opens a parallel agent, e.g. tmux new-window … {command}
         "planners": {"models": [{}, {}], "max_rounds": 0},
     },
     "literature": {
@@ -48,12 +60,15 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
     ("agents.backend", "str", AGENT_BACKENDS, "tmux | herdr | tuios | none — how the Orchestrator spawns parallel agents (rh resume always runs inline)"),
     ("agents.cli", "str", (), "agent binary the harness spawns, e.g. opencode (rh resume)"),
     ("agents.skills", "list", (), "skills every spawned agent must read first, comma-separated"),
-    ("agents.roles.orchestrator", "dict", (), "provider+model, must be the model running this session"),
-    ("agents.roles.literature", "dict", (), "provider+model for the Literature role"),
-    ("agents.roles.researcher", "dict", (), "provider+model for the Researcher role"),
-    ("agents.roles.reviewer", "dict", (), "provider+model for the Reviewer role"),
-    ("agents.roles.critique", "dict", (), "provider+model for the Critique role"),
-    ("agents.roles.writer", "dict", (), "provider+model for the Writer role"),
+    ("agents.commands.default", "str", (), "launch command used for any role without its own; placeholders {model} {thinking} {skills} {prompt} — written by the user/Orchestrator, never invented by rh"),
+    ("agents.commands.orchestrator", "str", (), "launch command `rh resume` execs (model + thinking level live here), e.g. pi --model {model} --thinking {thinking} --skill {skills}"),
+    ("agents.spawn", "str", (), "how `rh spawn` opens a parallel agent (blank = detached process + .rh/logs/ log), e.g. tmux new-window -n rh-{agent} -c {root} {command}"),
+    ("agents.roles.orchestrator", "dict", (), "provider+model(+thinking), e.g. '{\"provider\":\"pi\",\"model\":\"glm-5\",\"thinking\":\"high\"}' or pi/glm-5"),
+    ("agents.roles.literature", "dict", (), "provider+model(+thinking) for the Literature role"),
+    ("agents.roles.researcher", "dict", (), "provider+model(+thinking) for the Researcher role"),
+    ("agents.roles.reviewer", "dict", (), "provider+model(+thinking) for the Reviewer role"),
+    ("agents.roles.critique", "dict", (), "provider+model(+thinking) for the Critique role"),
+    ("agents.roles.writer", "dict", (), "provider+model(+thinking) for the Writer role"),
     ("agents.planners.models.0", "dict", (), "planner 1 model (must differ from planner 2)"),
     ("agents.planners.models.1", "dict", (), "planner 2 model"),
     ("agents.planners.max_rounds", "int", (0, 1, 2, 3, 5), "0 = cap at 3 rounds, then escalate"),
@@ -66,6 +81,30 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
     ("gates.user_approves_plan", "bool", (True, False), "user approves PLAN.md before implementation"),
     ("gates.critique_veto", "bool", (True, False), "Critique can veto the critique gate"),
 ]
+
+# Keys `rh env set` accepts beyond the static table above (any role name works,
+# so `agents.commands.<whoever>` and `agents.roles.<whoever>.model` are settable
+# without rh knowing the role ahead of time).
+ENV_PATTERNS: list[tuple[re.Pattern, str, str, str]] = [
+    (re.compile(r"^agents\.commands\.[a-z0-9_-]+$"), "str", "agents.commands.<role>",
+     "launch command for that role (placeholders {model} {thinking} {skills} {prompt})"),
+    (re.compile(r"^agents\.roles\.[a-z0-9_-]+\.(provider|model|thinking)$"), "str",
+     "agents.roles.<role>.provider|model|thinking", "one field of a role's model"),
+    (re.compile(r"^agents\.roles\.[a-z0-9_-]+$"), "dict", "agents.roles.<role>",
+     "provider+model(+thinking) for a role, e.g. pi/glm-5 or a JSON object"),
+]
+
+
+def schema_for(key: str) -> tuple[str, str, tuple, str] | None:
+    """(key, kind, choices, help) for a settable key — static table first, then patterns."""
+    for entry in ENV_SCHEMA:
+        if entry[0] == key:
+            return entry
+    for pattern, kind, _label, help_text in ENV_PATTERNS:
+        if pattern.match(key):
+            return (key, kind, (), help_text)
+    return None
+
 
 
 class ConfigError(RuntimeError):
@@ -173,12 +212,22 @@ def validate(env: dict) -> list[str]:
     if paywall not in PAYWALL_POLICIES:
         problems.append(f"literature.paywall must be one of {PAYWALL_POLICIES}, got {paywall!r}")
     orch = env.get("agents", {}).get("roles", {}).get("orchestrator", {})
-    if orch:
-        if not isinstance(orch, dict) or not orch:
-            problems.append("agents.roles.orchestrator must be a model object")
+    if orch and (not isinstance(orch, dict) or not orch):
+        problems.append("agents.roles.orchestrator must be a model object")
     skills = env.get("agents", {}).get("skills")
     if not isinstance(skills, list) or not all(isinstance(s, str) and s.strip() for s in skills):
         problems.append("agents.skills must be a list of skill names, e.g. [\"research-helper\"]")
+    agents = env.get("agents", {}) or {}
+    commands = agents.get("commands")
+    if commands is not None and not isinstance(commands, dict):
+        problems.append("agents.commands must be an object of role -> launch command string")
+    elif isinstance(commands, dict):
+        for name, template in commands.items():
+            if not isinstance(template, str):
+                problems.append(f"agents.commands.{name} must be a string command template")
+    spawn_template = agents.get("spawn")
+    if spawn_template is not None and not isinstance(spawn_template, str):
+        problems.append("agents.spawn must be a string command template (blank = background process)")
     return problems
 
 

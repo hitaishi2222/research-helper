@@ -237,6 +237,7 @@ def parse_plan_steps(text: str, default_phase: int = 4) -> list[dict]:
 
 def import_plan_md(root: Path, dry_run: bool = False) -> list[dict]:
     """Parse PLAN.md steps into tasks; existing ids get their fields refreshed.
+    Read-only for PLAN.md: this function never writes PLAN.md (user file stays put).
 
     PLAN.md is the truth (SKILL.md §10 contract 3): a retired title must not
     survive on the board. Task state/subtasks are never touched here.

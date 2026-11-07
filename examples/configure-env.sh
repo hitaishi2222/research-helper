@@ -17,10 +17,10 @@ rh env set \
   "agents.roles.orchestrator={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"$THINKING\"}" \
   "agents.roles.researcher={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"medium\"}" \
   "agents.roles.critique={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"medium\"}" \
-  "agents.commands.orchestrator=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --prompt-file {prompt_file}" \
-  "agents.commands.researcher=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --prompt-file {prompt_file}" \
-  "agents.commands.critique=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --prompt-file {prompt_file}" \
-  "agents.commands.default=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --prompt-file {prompt_file}" \
+  "agents.commands.orchestrator=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
+  "agents.commands.researcher=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
+  "agents.commands.critique=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
+  "agents.commands.default=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
   'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
 
 # The same selection drives `rh resume`: model + thinking level from

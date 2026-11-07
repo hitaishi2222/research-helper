@@ -39,6 +39,8 @@ DEFAULT_ENV: dict = {
             "writer": "",
         },
         "spawn": "",  # how `rh spawn` opens a parallel agent, e.g. tmux new-window … {command}
+        "shell": "",  # user's shell for `rh spawn terminal` (blank = $SHELL, else sh)
+        "split": "",  # pane layout for `rh spawn` pane mode: vertical|horizontal|window
         "planners": {"models": [{}, {}], "max_rounds": 0},
     },
     "literature": {
@@ -52,6 +54,7 @@ DEFAULT_ENV: dict = {
 }
 
 AGENT_BACKENDS = ("tmux", "herdr", "tuios", "none")
+AGENT_SPLITS = ("vertical", "horizontal", "window")
 PAYWALL_POLICIES = ("ask_user", "skip")
 
 # dotted key -> (type, choices, help) — drives `rh env set` and docs
@@ -60,9 +63,11 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
     ("agents.backend", "str", AGENT_BACKENDS, "tmux | herdr | tuios | none — how the Orchestrator spawns parallel agents (rh resume always runs inline)"),
     ("agents.cli", "str", (), "agent binary the harness spawns, e.g. opencode (rh resume)"),
     ("agents.skills", "list", (), "skills every spawned agent must read first, comma-separated"),
-    ("agents.commands.default", "str", (), "launch command used for any role without its own; placeholders {model} {thinking} {skills} {prompt} — written by the user/Orchestrator, never invented by rh"),
-    ("agents.commands.orchestrator", "str", (), "launch command `rh resume` execs (model + thinking level live here), e.g. pi --model {model} --thinking {thinking} --skill {skills}"),
+    ("agents.commands.default", "str", (), "launch command used for any role without its own; placeholders {model} {thinking} {skills} {prompt} {agent_file} — written by the user/Orchestrator, never invented by rh"),
+    ("agents.commands.orchestrator", "str", (), "launch command `rh resume` execs (model + thinking level live here), e.g. pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file}"),
     ("agents.spawn", "str", (), "how `rh spawn` opens a parallel agent (blank = detached process + .rh/logs/ log), e.g. tmux new-window -n rh-{agent} -c {root} {command}"),
+    ("agents.shell", "str", (), "user's shell for `rh spawn terminal` (blank = $SHELL, else sh), e.g. fish"),
+    ("agents.split", "str", AGENT_SPLITS, "pane layout for `rh spawn` pane mode: vertical | horizontal | window (new workspace/window)"),
     ("agents.roles.orchestrator", "dict", (), "provider+model(+thinking), e.g. '{\"provider\":\"pi\",\"model\":\"glm-5\",\"thinking\":\"high\"}' or pi/glm-5"),
     ("agents.roles.literature", "dict", (), "provider+model(+thinking) for the Literature role"),
     ("agents.roles.researcher", "dict", (), "provider+model(+thinking) for the Researcher role"),
@@ -222,12 +227,36 @@ def validate(env: dict) -> list[str]:
     if commands is not None and not isinstance(commands, dict):
         problems.append("agents.commands must be an object of role -> launch command string")
     elif isinstance(commands, dict):
+        import shlex
         for name, template in commands.items():
             if not isinstance(template, str):
                 problems.append(f"agents.commands.{name} must be a string command template")
+            elif not template.strip():
+                continue
+            else:
+                # Validate at `rh env set` time, not only at spawn time.
+                try:
+                    shlex.split(template)
+                except ValueError as exc:
+                    problems.append(f"agents.commands.{name} is not shell-splittable: {exc}")
+                if "{agent_file}" not in template and "{agent_file_contents}" not in template:
+                    problems.append(
+                        f"agents.commands.{name} missing {{agent_file}} — role file not wired into the harness system prompt "
+                        "(write it in ENV.md for the harness in use; see examples/envs/*.sh)"
+                    )
+                if "{prompt}" not in template and "{prompt_file}" not in template:
+                    problems.append(
+                        f"agents.commands.{name} missing {{prompt}}/{{prompt_file}} — session instructions have nowhere to go"
+                    )
     spawn_template = agents.get("spawn")
     if spawn_template is not None and not isinstance(spawn_template, str):
         problems.append("agents.spawn must be a string command template (blank = background process)")
+    shell = agents.get("shell")
+    if shell is not None and not isinstance(shell, str):
+        problems.append("agents.shell must be a string shell name or path")
+    split = agents.get("split")
+    if split not in ("",) + AGENT_SPLITS:
+        problems.append(f"agents.split must be one of {AGENT_SPLITS} or blank, got {split!r}")
     return problems
 
 

@@ -68,13 +68,19 @@ Inside the project root:
   papers/           downloaded PDFs, named <firstauthor><year>_<slug>.pdf
                     keep them: never delete or move a downloaded paper
   .rh/logs/         event logs, see §7
+  .rh/agents/<role>.md  per-role tailored job description; NO role info is hardcoded
+                       in rh — this file is the role. Created by scaffold
+                       (`rh agents <role> --write`), edited with the user. Wire it
+                       into the CLI's system-prompt area in agents.commands.<role>
   src/              implementation
   results/          every produced number, table, figure + the script that made it
 ```
 
 Artifacts are created on first write, in the phase that first needs them. If a phase is
 skipped with the user's agreement, its artifact simply never exists — that is allowed;
-an empty file is not.
+an empty file is not. **Pre-existing `PLAN.md` is adopted, never overwritten:**
+read it, ask the user (adopt / diff / skip), and mirror it with `rh plan import`.
+A forced write first archives the old file to `.rh/.bak/<timestamp>/`.
 
 Before writing any artifact, run `rh info <FILE.md>`: it prints that file's purpose, owner,
 phase, the sections it must have, the template to follow and the rules that bite there — so
@@ -119,14 +125,20 @@ installed on the machine. A binary on PATH does not mean this project should use
     "commands": {
       // how an agent CLI is STARTED — asked for, never invented. rh substitutes
       // the placeholders below; every {model} {thinking} {skills} {prompt}
-      // {prompt_file} {root} {slug} {role} must be written by the user/you.
-      "orchestrator": "pi --model {model} --thinking {thinking} --skill {skills} --prompt-file {prompt_file}",
-      "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --prompt-file {prompt_file}",
+      // {prompt_file} {agent_file} {root} {slug} {role} must be written by the user/you.
+      // {agent_file} is .rh/agents/<role>.md — put it in the harness's
+      // system-prompt flag for that CLI (e.g. pi: --system-prompt-file {agent_file};
+      // claude: --append-system-prompt-file {agent_file}; others: --system-file /
+      // reading AGENTS.md). rh never hardcodes the flag name.
+      "orchestrator": "pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}",
+      "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}",
       "default": "", //  used for any role without its own command
     },
     "spawn": "tmux new-window -n rh-{agent} -c {root} {command}", // how `rh spawn`
     //   opens a parallel agent ({command} = the launch command, shell-quoted);
     //   empty = start it detached and log to .rh/logs/
+    "shell": "fish", // user's shell for `rh spawn terminal` (blank = $SHELL, else sh); asked, never probed
+    "split": "vertical", // pane layout for `rh spawn` pane mode: vertical | horizontal | window (new workspace/window); asked, never assumed
 
     "planners": {
       // the two independent planners in phase 4
@@ -175,6 +187,12 @@ directory `.rh/ENV.md` sits in, and `.rh/` is what needs verifying before any ag
 Every phase states its **exit gate**. Do not enter the next phase with an unmet gate.
 
 ### Phase 0 — CONFIG → `.rh/ENV.md` config block
+
+`rh init` walks a short questionnaire (slug, agent count, backend, CLI, shell,
+split, skills — each skippable; skipping is the Orchestrator's job to ask later).
+It never overwrites existing files without archiving them first (`.rh/.bak/`);
+`--dry-run` previews and `--force` archives. If `PLAN.md` already exists in the
+project, adopt it — read it, then `rh plan import` — never overwrite it.
 
 Ask for the project root, then load `<root>/.rh/ENV.md`; if absent or its config block does
 not parse, interview and write the block. Print it and get a yes. Exit gate: the block
@@ -366,11 +384,26 @@ Critique gets its own agent from count 3 up because veto power needs an independ
 When a hat's work would be reviewed by the same context that did the work, say so in
 `STATUS.md` — the user must know a review was not independent.
 
+There is **no hardcoded role info** in rh. Each role is entirely its file
+`.rh/agents/<role>.md` (see `rh agents`). The file carries the role's rules
+and scope so harnesses that read AGENTS.md-style role files can be tailored
+to the role. Scaffold it with `rh agents <role> --write` (or all starter
+roles with `rh agents --write`), edit it with the user's approval, and the
+Orchestrator records the launch command for each role in `.rh/ENV.md`
+(`agents.commands.<role>`). `rh spawn <role>` then uses exactly that command
+to open the agent, wiring the role file into the harness's system-prompt
+area with `{agent_file}` (or, for `rh spawn terminal <cmd>`, a plain shell
+terminal in the user's shell and the pane layout in `agents.split`).
+
 Spawn agents with `rh spawn <role> "<instructions>"` (or `--prompt-file`). The launch
 command, its model, its thinking level and its skill selection all come from
-`agents.commands.<role>` in `.rh/ENV.md`; `rh spawn` appends the role contract (what the
-role owns, may and may not do, its board tasks, its artifacts) and opens it with
-`agents.spawn`. Preview first with `rh spawn <role> … --dry-run`; if `rh` warns that
+`agents.commands.<role>` in `.rh/ENV.md`; `rh spawn` puts the role file at
+`{agent_file}` (the template wires it into the CLI's system-prompt area),
+appends the session facts (model, skills, board tasks, current phase) to the
+prompt, and opens it with `agents.spawn`. For a plain terminal
+inside the same backend (not an agent), use `rh spawn terminal <cmd>` — it runs
+in `agents.shell` (or `$SHELL`) and respects `agents.split`, asking the user for
+the layout when it is not set. Preview first with `rh spawn <role> … --dry-run`; if `rh` warns that
 `{model}`, `{thinking}` or `{skills}` is missing from the template, fix the ENV.md command
 with the user instead of accepting the harness default.
 Before spawning, resolve and print the project path and check `.rh/ENV.md` is there (rule 12);
@@ -520,7 +553,7 @@ Commands agents use per phase:
 
 | Command | Phase | Notes |
 |---|---|---|
-| `rh init --slug NAME` | 0 | creates the `.rh/` layout; config is still asked per §2 |
+| `rh init [--slug NAME] [--force] [--dry-run] [--non-interactive]` | 0 | creates the `.rh/` layout non-destructively (never overwrites without `--force` backup); skippable questionnaire per §2 |
 | `rh env show` / `env list` | 0–2 | read and validate the config block + environment notes |
 | `rh env set KEY=VALUE ...` | 0 | writes `.rh/ENV.md`'s block **and** the `.rh/env.json` mirror; preserves the notes below it |
 | `rh add note\|literature\|gaps\|log <h> -m "..."` | 3+ | appends under a heading, creating it if missing; literature accepts a DOI |
@@ -529,7 +562,12 @@ Commands agents use per phase:
 | `rh tasks set <id> idle\|working\|complete` | 5–6 | board state (subtask ids work too); `rh tasks` shows every task, subtask and status |
 | `rh phase` / `rh phase N` | any | no argument: the current phase and its exit gate. With N: **gated** advance, refusing unmet gates; `--force` is a waiver → record it in STATUS.md (rule 11) |
 | `rh resume` / `rh -r` | any | execs the Orchestrator **in this terminal**: command from `agents.commands.orchestrator`, model + thinking level from `agents.roles.orchestrator`, only `agents.skills` loaded, `--prompt-file` for this session's instructions. `--dry-run` prints the exact command |
-| `rh spawn <role> [prompt]` | any | opens another role agent with `agents.commands.<role>` + `agents.spawn`; adds the role contract and its board tasks; `--dry-run`, `--inline`, `--prompt-file` |
+| `rh spawn <role> [prompt]` | any | opens another role agent with `agents.commands.<role>` + `agents.spawn`; `{agent_file}` puts `.rh/agents/<role>.md` in the template's system-prompt flag, board tasks + session facts go in the prompt; `--dry-run`, `--inline`, `--prompt-file`, `--split` |
+| `rh spawn terminal <cmd>` | any | opens a plain shell terminal (not an agent) in a new pane: shell from `agents.shell`/`$SHELL`, layout from `agents.split`; `--dry-run`, `--split` |
+| `rh agents [ROLE] [--write]` | any | list or show the per-role files in `.rh/agents/`; `--write` creates them from the built-in defaults |
+| `rh checklist` | any | live Orchestrator checklist: SKILL.md §0 rules + each phase exit gate + content checks, checked against disk; `--json` for agents |
+| `rh doctor` | any | verify what ENV.md names (shell, split, templates, role files, binaries) |
+| `rh agent status` / `rh gate check` / `rh log tail` / `rh handoff` | any | running agents from spawns.jsonl, gate report, §7 logs, fresh-session pack (rule 14) |
 | `rh info [FILE.md]` | any | what an artifact is for: owner, phase, required sections, template, rules. Read it before writing any artifact |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd` as ASCII (renderer-dependent); `--tools` lists renderers; `--example` prints a starter source |
 
@@ -557,8 +595,9 @@ Contracts that keep the two layers consistent:
    re-imports. STATUS.md remains the truth (rule 9) — the board is display state
    for `rh tasks`.
 
-4. **Same-terminal resume, explicit agent spawning.** `rh resume` never opens a
-   new pane or workspace: it execs the agent where the user typed the command,
+4. **Same-terminal resume, explicit agent spawning.** Only the Orchestrator follows
+   `rh resume` in the same terminal: it never opens a new pane or workspace, it execs
+   the agent where the user typed the command,
    with the command written in `agents.commands.orchestrator`. `rh spawn` opens
    one role agent — via `agents.spawn` when set, otherwise as a detached process
    logging to `.rh/logs/` — with the path check of rule 12 and the close of
@@ -573,7 +612,11 @@ Contracts that keep the two layers consistent:
 7. **Launch commands are configuration, not code.** `rh` hardcodes no agent
    flag: `agents.commands.<role>` and `agents.spawn` in `.rh/ENV.md` are the
    source, and `rh` only substitutes `{model}` `{thinking}` `{skills}` `{prompt}`
-   `{prompt_file}` `{root}` `{slug}` `{role}` (`{command}` in `agents.spawn`).
+   `{prompt_file}` `{agent_file}` `{root}` `{slug}` `{role}` (`{command}` in `agents.spawn`; the shell
+   for terminal mode and the pane layout come from `agents.shell`/`agents.split`, asked
+   of the user). The role file (`.rh/agents/<role>.md`, via `{agent_file}`) is how
+   each specialized agent gets its tailored system prompt — rh only substitutes the
+   path, the harness flag itself is in the template.
    A template that leaves `{model}`, `{thinking}` or `{skills}` out still runs,
    but `rh resume`/`rh spawn` say so in their notes — that warning means the
    session is not the one the ENV.md promised, so fix the command with the user.

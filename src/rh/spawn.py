@@ -11,9 +11,16 @@ Placeholders understood in a command template:
   {role} {agent}    role name (aliases)
   {prompt}          the full role prompt (one argv element, newlines intact)
   {prompt_file}     path of the prompt file written under `.rh/`
+  {agent_file}      path of `.rh/agents/<role>.md` — use it in the CLI's
+                    system-prompt area (e.g. `--system-prompt-file {agent_file}`)
+  {agent_file_contents}  contents of `.rh/agents/<role>.md` inline (for harnesses
+                    that take the text, not a path)
   {root} {slug}     project root, project slug
   {provider} {model} {thinking}   from `agents.roles.<role>`
   {skills}          comma-joined `agents.skills`
+  {skills:list}     ONE token per skill, no flag attached (bare token only; for
+                    harnesses whose flag takes a JSON/list arg — pair with the
+                    harness's list flag yourself, e.g. --skills={skills:list})
 
 `agents.spawn` additionally gets `{command}` — the launch command, shell-quoted.
 
@@ -23,6 +30,7 @@ so `rh resume`/`rh spawn` can tell the user their ENV.md is not being honoured.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -35,61 +43,17 @@ from .add import slugify
 from .tasks import TaskStore, phase_name
 
 # --- roles (SKILL.md §5) -------------------------------------------------------
-
-ROLE_INFO: dict[str, dict] = {
-    "orchestrator": {
-        "one_line": "the head of the project — the current runner is always the Orchestrator",
-        "owns": "routing, STATUS.md, PLAN.md merges, every question to the user",
-        "may": "delegate, gate, escalate, edit artifacts",
-        "may_not": "implement, fix code, approve its own plan, pick models",
-        "artifacts": ["STATUS.md", "PLAN.md", "ENV.md"],
-    },
-    "literature": {
-        "one_line": "survey and read the literature, decide the output layout",
-        "owns": "papers/, LITERATURE.md, OUTPUT_LAYOUT.md, GAPS.md",
-        "may": "download open-access papers, read, cite, flag code smells in sources",
-        "may_not": "paraphrase unread papers, substitute references, change the plan",
-        "artifacts": ["LITERATURE.md", "OUTPUT_LAYOUT.md", "GAPS.md"],
-    },
-    "researcher": {
-        "one_line": "implement the approved plan steps and record every number",
-        "owns": "src/, results/",
-        "may": "implement, test, probe tools, append to OUTPUT_LAYOUT.md from sources it reads",
-        "may_not": "change scope, delete user files, install system packages, edit tests to pass",
-        "artifacts": ["PLAN.md", "OUTPUT_LAYOUT.md"],
-    },
-    "reviewer": {
-        "one_line": "independent review of what was built — findings only",
-        "owns": "review verdicts (STATUS.md, .rh/logs/)",
-        "may": "read everything, file findings, demand evidence",
-        "may_not": "fix what it finds (independence is the point)",
-        "artifacts": ["STATUS.md"],
-    },
-    "critique": {
-        "one_line": "adversarial questions against the artifacts, with veto power",
-        "owns": "the blocking-question list, the critique gate",
-        "may": "question anything, block a gate, demand falsification",
-        "may_not": "implement, soften its own findings",
-        "artifacts": ["STATUS.md"],
-    },
-    "writer": {
-        "one_line": "draft the manuscript from artifacts, never from memory",
-        "owns": "MANUSCRIPT.md",
-        "may": "draft, restructure, cite from artifacts",
-        "may_not": "introduce evidence not in results/ or LITERATURE.md",
-        "artifacts": ["MANUSCRIPT.md", "OUTPUT_LAYOUT.md"],
-    },
-}
-
-ROLES = tuple(ROLE_INFO)
+# No hardcoded role info. Roles are files: `.rh/agents/<role>.md` (see agents.py).
+# The set is whatever the user defines there and/or in
+# `agents.commands.<role>` in `.rh/ENV.md`.
 
 # --- template engine ----------------------------------------------------------
 
 # `{name}` but not `${name}` (shell variables in a spawn template survive intact)
 _PLACEHOLDER = re.compile(r"(?<!\$)\{(\w+)\}")
 
-PLACEHOLDERS = ("role", "agent", "prompt", "prompt_file", "root", "slug",
-                "provider", "model", "thinking", "skills")
+PLACEHOLDERS = ("role", "agent", "prompt", "prompt_file", "agent_file",
+                "agent_file_contents", "root", "slug", "provider", "model", "thinking", "skills")
 SPAWN_PLACEHOLDERS = PLACEHOLDERS + ("command",)
 
 
@@ -163,11 +127,22 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
     agents = env.get("agents") or {}
     cli = str(agents.get("cli") or "").strip()
     notes: list[str] = []
+    # Role file: `.rh/agents/<role>.md`. Candidates: lowercase, UPPERCASE, Capitalized.
+    agent_file_path = ""
+    agent_file_contents = ""
+    try:
+        from . import agents as _agents
+        agent_file_path = str(_agents.role_file(root, role))
+        agent_file_contents = _agents.read_role(root, role) or ""
+    except (ImportError, OSError):
+        agent_file_path = ""
     values = {
         "role": role,
         "agent": role,
         "prompt": prompt,
         "prompt_file": str(prompt_file),
+        "agent_file": agent_file_path,
+        "agent_file_contents": agent_file_contents,
         "root": str(root),
         "slug": str((env.get("project") or {}).get("slug") or ""),
         "provider": spec["provider"],
@@ -231,7 +206,19 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
     # flag that introduced it (`--model {model}` with no model set → no flag).
     empty = {name for name in ("provider", "model", "thinking", "skills") if not values[name]}
     argv: list[str] = []
+    # Named whole-token expansions that produce 0+ argv elements:
+    #   {skills:list} → ONE token per skill (for `--skill a --skill b` style flags,
+    #   written as `--skill {skills:list}` with the flag repeated by the template;
+    #   a template that writes the flag once gets a single expansion token list).
+    # Plain {skills} stays comma-joined for backwards compatibility.
     for tok in tokens:
+        if tok == "{skills:list}":
+            if not skills:
+                if argv and argv[-1].startswith("-") and "{" not in argv[-1]:
+                    argv.pop()
+                continue
+            argv.extend(skills)
+            continue
         whole = re.fullmatch(r"\{(\w+)\}", tok)
         if whole and whole.group(1) in empty:
             if argv and argv[-1].startswith("-") and "{" not in argv[-1]:
@@ -259,10 +246,52 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
             f"skills {', '.join(skills)} are in the prompt but not restricted at the CLI — "
             f"add the harness flag to {source} (e.g. one `--skill` per name, expanded from {{skills}})"
         )
+    if "{agent_file}" not in template:
+        notes.append(
+            f"{{agent_file}} is not in {source} — .rh/agents/{role}.md is not wired into the "
+            "harness's system prompt (use the harness's flag, e.g. --system-prompt-file {agent_file})"
+        )
     if not spec["model"]:
         notes.append(f"agents.roles.{role}.model is empty — the harness default model will run")
     plan["notes"] = _uniq(notes)
     return plan
+
+
+def detect_shell(env: dict | None = None) -> str:
+    """User shell: agents.shell in ENV.md, else $SHELL, else sh. Never probes binaries."""
+    env = env or {}
+    cfg = str((env.get("agents") or {}).get("shell") or "").strip()
+    if cfg:
+        return cfg
+    # $SHELL is usually a full path (/usr/bin/fish); the name is what we run
+    return Path(os.environ.get("SHELL", "").strip()).name or "sh"
+
+
+def detect_split(env: dict | None = None) -> str:
+    """Pane layout: agents.split in ENV.md, else '' (the Orchestrator asks the user)."""
+    env = env or {}
+    raw = str((env.get("agents") or {}).get("split") or "").strip().lower()
+    return "window" if raw in ("new-window", "new_workspace", "workspace") else raw
+
+
+def terminal_plan(root: Path, env: dict, command: str, split: str | None = None) -> dict:
+    """Plan for opening a plain shell terminal (not an agent) in a pane/window.
+
+    One-shot: `shell -c command`. Layout comes from agents.split. Returns
+    {argv, shell, split, command, notes}.
+    """
+    shell = detect_shell(env)
+    chosen = (split or "").strip().lower() or detect_split(env)
+    notes: list[str] = []
+    if not chosen:
+        notes.append("agents.split is not set — ask the user: vertical-split, horizontal-split, or new workspace/window, or set agents.split=vertical|horizontal|window")
+    return {
+        "argv": [shell, "-c", command],
+        "shell": shell,
+        "split": chosen,
+        "command": command,
+        "notes": notes,
+    }
 
 
 def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
@@ -291,10 +320,31 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
 
 def spawn_now(root: Path, env: dict, role: str, plan: dict) -> dict:
     """Open the agent: pane via `agents.spawn` when set, else a detached process."""
-    preview = spawn_preview(root, env, role, plan)
+    return _start(root, role, plan, spawn_preview(root, env, role, plan))
+
+
+def terminal_preview(root: Path, env: dict, plan: dict) -> dict:
+    """`spawn_preview` for a shell terminal (no agent, role=`terminal`)."""
+    synthetic = {"argv": plan["argv"], "prompt_file": "", "provider": "",
+                 "model": "", "thinking": "", "skills": [], "notes": []}
+    preview = spawn_preview(root, env, "terminal", synthetic)
+    preview["shell"] = plan["shell"]
+    preview["split"] = plan.get("split", "")
+    preview["terminal"] = True
+    return preview
+
+
+def spawn_terminal_now(root: Path, env: dict, plan: dict, preview: dict | None = None) -> dict:
+    """Start the shell terminal planned by `terminal_plan`."""
+    return _start(root, "terminal", plan, preview or terminal_preview(root, env, plan))
+
+
+def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
+    """Run a preview: pane template or detached process. Records the spawn."""
     if preview["mode"] == "pane":
         proc = subprocess.run(preview["command"], shell=True, cwd=str(root), check=False)
         preview["returncode"] = proc.returncode
+        _spawn_record(root, role, plan, None, "pane")
         return preview
     if preview["mode"] != "background":
         return preview
@@ -306,7 +356,48 @@ def spawn_now(root: Path, env: dict, role: str, plan: dict) -> dict:
             stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
         )
     preview["pid"] = proc.pid
+    _spawn_record(root, role, plan, proc.pid, "background")
     return preview
+
+
+def _spawn_record(root: Path, role: str, plan: dict, pid: int | None, mode: str) -> None:
+    """Append one JSON line per spawn to .rh/logs/spawns.jsonl (agent status + budget)."""
+    log_dir = paths.logs_dir(root)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "role": role, "pid": pid, "mode": mode,
+        "model": plan.get("model", ""), "source": plan.get("source", ""),
+        "log": "", "ts": datetime.now().isoformat(),
+    }
+    with (log_dir / "spawns.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+def running_count(root: Path) -> int:
+    """Concurrent agents: spawn records whose recorded pid is still alive.
+
+    Pane spawns record no pid (the backend owns the process), so they are not
+    counted — the panes are visible to the user instead.
+    """
+    f = paths.logs_dir(root) / "spawns.jsonl"
+    if not f.exists():
+        return 0
+    alive = 0
+    for line in f.read_text(encoding="utf-8").splitlines():
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if rec.get("closed"):
+            continue
+        pid = rec.get("pid")
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive += 1
+            except OSError:
+                pass
+    return alive
 
 
 def exec_argv(root: Path, argv: list[str]) -> tuple[bool, str]:
@@ -338,29 +429,22 @@ def role_tasks(store: TaskStore, role: str, limit: int = 8) -> list[dict]:
     return sorted(owned, key=lambda t: (prio.get(t["state"], 3), t["phase"], t["id"]))[:limit]
 
 
-def _artifact_one_liners(names: list[str]) -> list[tuple[str, str]]:
-    """(name, one-line purpose) for a role's artifacts — same text as `rh info`."""
-    from .artifacts import ARTIFACTS, resolve
-
-    out = []
-    for name in names:
-        key = resolve(name)
-        if key:
-            out.append((name, ARTIFACTS[key]["purpose"]))
-    return out
-
-
 def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
                       extra: str = "") -> str:
-    """The prompt `rh spawn` hands to a role agent."""
+    """The prompt `rh spawn` hands to a role agent.
+
+    Role definition comes from `.rh/agents/<role>.md` (the Orchestrator's
+    tailored agent file). If the file is missing the prompt names that and
+    points at `rh agents <role> --write`; rh never invents role rules.
+    """
     role = (role or "").strip().lower()
-    info = ROLE_INFO.get(role, {
-        "one_line": f"a project-defined agent role '{role}'",
-        "owns": "whatever .rh/ENV.md / the Orchestrator assigns",
-        "may": "act inside its assignment",
-        "may_not": "change scope, models, or the plan",
-        "artifacts": ["STATUS.md"],
-    })
+    try:
+        from . import agents as agents_mod
+        role_file_text = agents_mod.read_role(root, role)
+        agent_path = str(agents_mod.role_file(root, role))
+    except (ImportError, OSError):
+        role_file_text = None
+        agent_path = f".rh/agents/{role}.md"
     spec = role_spec(env, role)
     skills = skills_for(env)
     slug = (env.get("project") or {}).get("slug") or "untitled"
@@ -374,12 +458,22 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
         f"You are the {role.upper()} agent for the research project '{slug}'.",
         f"Project root (verify you are here before writing anything): {root}",
         f"Session model: {model_line}",
+        f"Role file: {agent_path} — your tailored job description; follow it.",
         "",
-        f"Role: {info['one_line']}",
-        f"You own: {info['owns']}",
-        f"You may: {info['may']}",
-        f"You may not: {info['may_not']}",
-        "",
+    ]
+    if role_file_text:
+        lines += ["## Role file (.rh/agents/<role>.md) — this is your tailored job description:", ""]
+        lines += role_file_text.strip().splitlines()
+        lines += [""]
+    else:
+        lines += [
+            f"No role file yet at {agent_path} — the Orchestrator creates it with",
+            f"  rh agents {role} --write",
+            "and edits it with user approval. Ask the Orchestrator for your scope",
+            "until then; do not guess at your role.",
+            "",
+        ]
+    lines += [
         ("Load exactly these skills for this session, and no others "
          "(keeping the session lean is the point):"),
     ]
@@ -390,13 +484,13 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
         "",
         f"Current phase: {phase_name(current)}",
     ]
+    lines += [
+        "Before writing any artifact, run `rh info <FILE>` — it describes purpose,",
+        "sections, template and the rules that bite there (SKILL.md §1).",
+    ]
     if gate["problems"]:
         lines.append("Unmet gates you must not paper over:")
         lines += [f"  - {p}" for p in gate["problems"]]
-    owned_artifacts = _artifact_one_liners(info["artifacts"])
-    if owned_artifacts:
-        lines += ["", "Artifacts you own — run `rh info <FILE>` before writing any of them:"]
-        lines += [f"  - {name}: {purpose}" for name, purpose in owned_artifacts]
     tasks = role_tasks(store, role)
     if tasks:
         lines += ["", f"Tasks on the board for this role (owner={role}):"]

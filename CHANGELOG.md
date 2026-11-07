@@ -12,9 +12,9 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
 
 - **`rh spawn <role> [prompt]`** — open one role agent (`literature`,
   `researcher`, `reviewer`, `critique`, `writer`, or any role you define) with
-  the launch command written in `.rh/ENV.md`. It appends the role contract
-  (owns / may / may-not, its board tasks with deliverable + verify, the artifacts
-  it owns) and opens it through `agents.spawn` (tmux/herdr/tuios pane) or as a
+  the launch command written in `.rh/ENV.md`. It passes the role file
+  `.rh/agents/<role>.md` and appends the session facts (model, skills, its board
+  tasks with deliverable + verify, the current phase) and opens it through `agents.spawn` (tmux/herdr/tuios pane) or as a
   detached process logging to `.rh/logs/`. Flags: `--prompt`, `--prompt-file`,
   `--inline`, `--dry-run`, `--json`.
 - **`rh info [FILE.md]`** — one clean description per artifact: purpose, owner,
@@ -33,6 +33,49 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
 - `examples/` — starter scripts (`configure-env.sh`, `spawn-researcher.sh`,
   `spawn-critique.sh`) and per-role prompt templates with `{{PLACEHOLDER}}`s, so
   an agent (or a user) can see how commands, roles, tasks and prompts fit.
+
+- **`rh spawn terminal <command>`** — open a plain shell terminal (not an agent) in a
+  new pane, e.g. `rh spawn terminal 'pytest -q'`. Shell from `agents.shell` in
+  `.rh/ENV.md` (else `$SHELL`, else `sh`); pane layout from `agents.split`
+  (`vertical` | `horizontal` | `window` — new workspace/window), asked of the user
+  when unset. `--dry-run`, `--split`, `--json`.
+- **Per-role agent files** — `.rh/agents/<role>.md` is the *only* role
+  description in the system: no role info is hardcoded in `rh`. `rh agents
+  [ROLE] [--write]` lists/shows/scaffolds them. The Orchestrator edits them
+  with user approval and records the launch command per role in `.rh/ENV.md`
+  (`agents.commands.<role>`), which `rh spawn` uses exactly; the `{agent_file}`
+  placeholder puts the role file into the harness's system-prompt area
+  (e.g. `--system-prompt-file {agent_file}` or the harness equivalent).
+- **`rh checklist`** — the Orchestrator's live checklist: every SKILL.md §0
+  non-negotiable plus each phase's exit gate, checked against the project on
+  disk (via `rh phase` gates), never self-reported. `--json` for agents.
+  v2 adds content checks (STATUS header, PLAN `verify:` lines, DOI per
+  literature entry, exactly one layout).
+- **`rh doctor`** — verifies what ENV.md names: shell on PATH, `agents.split`
+  valid, every `agents.commands.<role>` splittable with `{agent_file}` +
+  `{prompt}`, role files present, backend binary present. Checks by name only.
+- **`rh agent status`, `rh gate check`, `rh log tail`, `rh handoff`** — spawn
+  records in `.rh/logs/spawns.jsonl`, machine-readable gate report, §7 log
+  reader, fresh-session pack (rule 14).
+- **`agents.count` budget enforcement** — `rh spawn` refuses the (count+1)th
+  concurrent agent without `--force` (waiver → STATUS.md, rule 11).
+- **List/content placeholders** — `{skills:list}` expands to one token per
+  skill; `{agent_file_contents}` puts the role file contents inline.
+- **`{agent_file}` at `rh env set` time** — missing `{agent_file}` or
+  `{prompt}` in a command template is a config warning immediately, not only
+  at spawn.
+- **`examples/envs/{pi,claude,codex}.sh`** — the only place harness flags live.
+- **`rh init` is non-destructive.** Existing `ENV.md`, `tasks.json`, and role
+  files are never overwritten silently: `--force` archives each to
+  `.rh/.bak/<timestamp>/` first; `--dry-run` previews; `--clean` needs
+  `--force` when files exist. `PLAN.md` is never touched by init.
+- **`rh init` questionnaire.** A few skippable questions (slug, count, backend,
+  CLI, shell, split, skills, harness snippet) write ENV.md in one go. Every
+  question can be skipped (`s`); skipping makes it the Orchestrator's job.
+  `--non-interactive` / `--json` skip it entirely.
+- **`PLAN.md` guard.** Pre-existing `PLAN.md` is adopted, never overwritten:
+  `rh` reads it and mirrors it with `rh plan import`; forced writes archive
+  to `.rh/.bak/` first. `rh plan import` stays read-only for `PLAN.md`.
 
 ### Changed
 
@@ -64,8 +107,6 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
 
 Config, orchestration and task-board cleanup driven by real-project use
 (`jmcc_cepo4_gcn`).
-
-### Added
 
 - **`agents.skills`** config key (list): the skills every spawned agent must read
   before touching the project. Defaults to `["research-helper"]`, settable with

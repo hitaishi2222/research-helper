@@ -25,13 +25,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
 
 from . import __version__, config, paths, ui, workflow
 from . import add as add_mod
+from . import agents as agents_mod
 from . import artifacts as artifacts_mod
+from . import checklist as checklist_mod
+from . import doctor as doctor_mod
 from . import resume as resume_mod
 from . import search as search_mod
 from . import spawn as spawn_mod
@@ -48,30 +52,184 @@ def with_root(fn):
 
 @with_root
 def cmd_init(args, root: Path):
-    if args.clean and root.exists():
-        import shutil
-        shutil.rmtree(root / ".rh", ignore_errors=True)
+    """`rh init` — create the .rh/ workspace. Never overwrites without backup.
+
+    Existing files (ENV.md, tasks.json, PLAN.md, role files) are never
+    clobbered silently: without --force rh stops and says what exists; with
+    --force it archives each file to .rh/.bak/<timestamp>/ first and prints
+    the backup path. --dry-run previews everything without writing.
+    --clean still removes .rh/ (kept for compatibility, with a warning).
+    """
+    dry = bool(getattr(args, "dry_run", False))
+    force = bool(getattr(args, "force", False))
+    would_write: list[str] = []
+    backups: list[str] = []
+
+    # .rh/ layout is folders-only; ensure_layout never writes file contents
+    d = paths.rh_dir(root)
+    would_write += [f"create {d}/ (folders: logs/ notes/ tasks/ tmp/)",
+                    "create src/ results/ papers/ at root"]
+
+    # Sensitive existing files
+    env_file = paths.env_md(root)
+    tasks_file = paths.tasks_json(root)
+    for f, what in ((env_file, "ENV.md config block"), (tasks_file, "task board")):
+        if f.exists():
+            would_write.append(f"{f} exists ({what}) — kept, unless --force archives it first")
+    plan_file = paths.artifact_path(root, "PLAN.md")
+    if plan_file.exists():
+        would_write.append(f"PLAN.md already exists at {plan_file} — adopt it, do not overwrite")
+
+    # Existing role files
+    role_files = sorted((d / "agents").glob("*.md")) if (d / "agents").is_dir() else []
+
+    # Questionnaire answers (skippable — Orchestrator asks later if skipped)
+    answers: dict[str, str] = {}
+    if not args.non_interactive and not dry and not getattr(args, "json", False):
+        answers = _init_questionnaire(args, root)
+
+    # Effective slug: flag wins, then questionnaire, then existing
+    slug = args.slug or answers.get("slug") or ""
+
+    if dry:
+        if getattr(args, "json", False):
+            ui.json_out({"root": str(root), "would_write": would_write, "dry_run": True, "slug": slug, "answers": answers})
+            return 0
+        print(ui.banner("rh init (dry-run)", f"{root}"))
+        for w in would_write:
+            print(f"  would {w}")
+        if role_files:
+            for rf in role_files:
+                print(f"  would keep role file {rf}")
+        if slug:
+            print(f"  would set project.slug={slug}")
+        if answers:
+            print(f"  questionnaire answers: {answers}")
+        print(ui.colorize("  nothing written (dry-run)", ui.DIM))
+        return 0
+
+    if args.clean:
+        import shutil as _shutil
+        print(ui.colorize(f"  --clean: removing {d}/ (including ENV.md and tasks.json)", ui.YELLOW))
+        _shutil.rmtree(d, ignore_errors=True)
+
+    # Non-destructive guard: existing sensitive files block without --force
+    blocking = [] if args.clean else [str(f) for f in (env_file, tasks_file) if f.exists()]
+    if blocking and not force:
+        print(ui.colorize("✗ refusing to overwrite existing files without --force:", ui.RED), file=sys.stderr)
+        for b in blocking:
+            print(f"  - {b}", file=sys.stderr)
+        print(ui.colorize("  re-run with --force to archive them to .rh/.bak/<timestamp>/ and start fresh", ui.DIM), file=sys.stderr)
+        return 1
+
+    # Backup before any overwrite
+    for f in [env_file, tasks_file]:
+        if f.exists():
+            bak = paths.backup_file(root, f)
+            backups.append(str(bak))
+
     d = paths.ensure_layout(root)
     tasks_mod.TaskStore(root).load()  # ensure tasks.json shape exists lazily
-    if args.slug:
+
+    # ENV.md: created when missing, updated with the slug/questionnaire answers,
+    # left untouched (content-wise) otherwise
+    if slug or answers or not env_file.exists():
         env = config.load_env(root)
-        env["project"]["slug"] = args.slug
+        if slug:
+            env["project"]["slug"] = slug
+        for key, val in answers.items():
+            if key.startswith(("agents.", "project.")):
+                try:
+                    config.set_nested(env, key, config.coerce_value(val, config.schema_for(key)[1]))
+                except Exception:
+                    print(ui.colorize(f"  ⚠ could not write {key}={val!r} — set it later with "
+                                      f"`rh env set {key}=...`", ui.YELLOW))
         config.save_env(root, env)
+
     (d / ".gitkeep").write_text("") if not (d / ".gitkeep").exists() else None
     if getattr(args, "json", False):
-        ui.json_out({"root": str(root), "rh_dir": str(d), "initialized": True})
+        ui.json_out({"root": str(root), "rh_dir": str(d), "initialized": True,
+                     "backups": backups, "slug": slug, "answers": answers})
         return 0
     print(ui.banner("rh init", f"{root}"))
     print(f"  {ui.colorize('✓', ui.GREEN)} created {d}/")
     for sub in ("logs/", "notes/", "tasks/", "tmp/"):
         print(f"  {ui.colorize('✓', ui.GREEN)} .rh/{sub}")
     print(f"  {ui.colorize('✓', ui.GREEN)} src/ results/ papers/ at root")
-    print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
+    if backups:
+        print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
+        for b in backups:
+            print(f"  {ui.colorize('↷', ui.DIM)} archived to {b}")
+    elif env_file.exists() and not (slug or answers):
+        print(f"  {ui.colorize('↷', ui.DIM)} ENV.md kept as-is at {env_file}")
+    else:
+        print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
+    if role_files:
+        for rf in role_files:
+            print(f"  {ui.colorize('↷', ui.DIM)} kept role file {rf} (not overwritten)")
+    if plan_file.exists():
+        print(ui.colorize(f"  {ui.colorize('↷', ui.YELLOW)} PLAN.md already exists at {plan_file} — adopt it (rh plan import), do not overwrite", ui.DIM))
+    if answers:
+        skipped = [k for k, v in answers.items() if v == "s"]
+        if skipped:
+            print(ui.colorize(f"  skipped (Orchestrator will ask): {', '.join(skipped)}", ui.DIM))
     print()
     print(f"Next: {ui.colorize('rh env set project.slug=<name>', ui.CYAN)}  "
-          f"·  {ui.colorize('rh env show', ui.CYAN)}")
+          f"·  {ui.colorize('rh env show', ui.CYAN)}  ·  {ui.colorize('rh doctor', ui.CYAN)}")
     return 0
 
+
+def _init_questionnaire(args, root: Path) -> dict[str, str]:
+    """Ask the few questions that let ENV.md be born with answers.
+
+    Every question is skippable with `s` (or empty with no default): the
+    Orchestrator asks later. Non-interactive callers never reach here
+    (--non-interactive, --json, --dry-run skip it entirely).
+    """
+    if not sys.stdin.isatty():
+        return {}
+    answers: dict[str, str] = {}
+
+    def ask(key: str, title: str, default: str, choices: str = "") -> None:
+        print(ui.colorize(f"? {title}", ui.BOLD))
+        if choices:
+            print(ui.colorize(f"  {choices}", ui.DIM))
+        print(ui.colorize(f"  enter=default {default!r} · s=skip (Orchestrator asks later) · Ctrl-C=skip all", ui.DIM))
+        try:
+            raw = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            answers[key] = "s"
+            return
+        if raw.lower() == "s":
+            answers[key] = "s"
+        elif raw == "":
+            answers[key] = default
+        else:
+            answers[key] = raw
+
+    ask("slug", "Project slug (kebab-case, e.g. my-project)", args.slug or "demo")
+    ask("agents.count", "How many parallel agents for planning and research? (1..4)", "1", "1 | 2 | 3 | 4")
+    ask("agents.backend", "Backend for parallel agents?", "none", "tmux | herdr | tuios | none")
+    ask("agents.cli", "Agent CLI binary?", "", "e.g. pi, claude, codex — blank = harness default")
+    ask("agents.shell", "Your shell?", "", "e.g. fish, zsh, bash — blank = $SHELL")
+    ask("agents.split", "Pane layout for rh spawn?", "", "vertical | horizontal | window — blank = ask at first spawn")
+    ask("agents.skills", "Skills every agent must load?", "research-helper", "comma-separated, e.g. research-helper,crw")
+
+    # harness snippet: copy-paste only, never executed here
+    print(ui.colorize("? Harness snippet (examples/envs/*.sh) — copy-paste, s=skip", ui.BOLD))
+    print(ui.colorize("  pi | claude | codex | custom (type the file path, or s to skip)", ui.DIM))
+    try:
+        raw = input("  > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        raw = "s"
+    if raw in ("pi", "claude", "codex"):
+        answers["snippet"] = f"examples/envs/{raw}.sh"
+    elif raw and raw != "s":
+        answers["snippet"] = raw
+    else:
+        answers["snippet"] = "s"
+    return answers
 
 def _env_value(value) -> str:
     """One-line display for a config value (dicts become provider/model)."""
@@ -219,6 +377,11 @@ def cmd_add(args, root: Path):
         print(ui.colorize(f"✓ task {task['id']} ({task['state']}, {tasks_mod.phase_name(phase)})", ui.GREEN))
         return 0
     else:
+        # PLAN.md guard: warn when appending to a pre-existing plan
+        if args.target == "plan":
+            pf = paths.artifact_path(root, "PLAN.md")
+            if pf.exists() and pf.stat().st_size > 0:
+                print(ui.colorize(f"↷ PLAN.md already exists at {pf} — appended a step; read it first (rh info PLAN.md) and mirror with `rh plan import`", ui.YELLOW))
         target, result = add_mod.add_text(root, args.target, args.heading, body)
     if getattr(args, "json", False):
         ui.json_out({"target": str(target), "result": result})
@@ -599,7 +762,7 @@ def cmd_describe(args, root: Path):
         },
         "spawn": {
             "command": "rh spawn <role> \"<instructions>\" [--inline] [--dry-run]",
-            "roles": list(spawn_mod.ROLES),
+            "roles": agents_mod.list_roles(root),
             "launch_template": "agents.commands.<role> (falls back to agents.commands.default)",
             "window_template": "agents.spawn — how a parallel agent is opened; blank = "
                                "detached process with a log in .rh/logs/",
@@ -736,6 +899,241 @@ def cmd_resume(args, root: Path):
 
 
 @with_root
+def cmd_doctor(args, root: Path):
+    """`rh doctor` — verify what ENV.md names actually exists on this machine."""
+    data = doctor_mod.check(root)
+    if getattr(args, "json", False):
+        ui.json_out(data)
+        return 0 if data["ok"] else 1
+    print(ui.banner("Doctor", f"root: {root}"))
+    for item in data["checks"]:
+        mark = ui.colorize("[✓]", ui.GREEN) if item["ok"] else ui.colorize("[✗]", ui.RED)
+        print(f"  {mark} {item['id']:28} {item['detail']}")
+    print()
+    print(ui.colorize("✓ all named tools present" if data["ok"] else f"✗ {data['failures']} check(s) failed — fix ENV.md or create the named file/binary",
+                      ui.GREEN if data["ok"] else ui.YELLOW))
+    return 0 if data["ok"] else 1
+
+
+@with_root
+def cmd_checklist(args, root: Path):
+    """`rh checklist` — the Orchestrator's live checklist (SKILL.md §0 + phase exits)."""
+    data = checklist_mod.build_checklist(root)
+    if getattr(args, "json", False):
+        ui.json_out(data)
+        return 0
+    print(ui.banner(f"Checklist — {data['phase_name']}", f"root: {root}"))
+    for item in data["items"]:
+        st = item["status"]
+        if st == "ok":
+            mark = ui.colorize("[✓]", ui.GREEN)
+        elif st == "current":
+            mark = ui.colorize("[~]", ui.CYAN)
+        else:
+            mark = ui.colorize("[ ]", ui.YELLOW)
+        print(f"  {mark} {item['label']}")
+        if item.get("detail"):
+            print(ui.colorize(f"      {item['detail']}", ui.DIM))
+    print()
+    if data["ok"]:
+        print(ui.colorize("✓ all checks satisfied", ui.GREEN))
+    else:
+        print(ui.colorize(f"⚠ {data['pending']} pending — resolve or record a waiver in STATUS.md (rule 11)", ui.YELLOW))
+    return 0
+
+
+@with_root
+def cmd_agents(args, root: Path):
+    """`rh agents [ROLE]` — list or show the per-role agent files (.rh/agents/<role>.md)."""
+    role = (getattr(args, "role", None) or "").strip().lower()
+    if getattr(args, "write", False):
+        if role:
+            p = agents_mod.write_one(root, role)
+            if getattr(args, "json", False):
+                ui.json_out({"written": str(p)})
+                return 0
+            print(ui.colorize(f"✓ wrote {p}", ui.GREEN))
+            return 0
+        written = agents_mod.write_all(root)
+        if getattr(args, "json", False):
+            ui.json_out({"written": [str(x) for x in written]})
+            return 0
+        if not written:
+            print(ui.colorize("✓ all role files already exist in .rh/agents/", ui.GREEN))
+        for pth in written:
+            print(ui.colorize(f"✓ wrote {pth}", ui.GREEN))
+        return 0
+    if role:
+        info = agents_mod.role_file_info(root, role)
+        content = agents_mod.read_role(root, role)
+        if getattr(args, "json", False):
+            ui.json_out({**info, "content": content or ""})
+            return 0
+        if content is None:
+            print(ui.colorize(f"⏳ no .rh/agents/{role}.md yet — `rh agents {role} --write` scaffolds it; the Orchestrator fills it in with the user.", ui.YELLOW))
+            return 0
+        print(content)
+        return 0
+    # list
+    roles = agents_mod.list_roles(root)
+    if getattr(args, "json", False):
+        ui.json_out([agents_mod.role_file_info(root, r) for r in roles])
+        return 0
+    print(ui.banner("Agents", ".rh/agents/<role>.md — tailored role files (no role info is hardcoded in rh)"))
+    for r in roles:
+        info = agents_mod.role_file_info(root, r)
+        mark = "✓" if info["exists"] else "·"
+        print(f"  {mark} {ui.colorize(r, ui.CYAN):12} {info['file']} ({'exists' if info['exists'] else 'missing — run `rh agents --write`'})")
+    print(ui.colorize("  Edit the .md files with user approval; ENV.md holds agents.commands.<role> per role.", ui.DIM))
+    return 0
+
+
+@with_root
+def cmd_spawn_terminal(args, root: Path):
+    """`rh spawn terminal <command>` — open a plain shell terminal in a new pane."""
+    if not paths.rh_dir(root).exists():
+        # Still allow --dry-run outside a project for shell/split detection demo
+        if not getattr(args, "dry_run", False):
+            print(ui.colorize(f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED), file=sys.stderr)
+            return 1
+    env = config.load_env(root) if paths.rh_dir(root).exists() else config.deep_merge(config.DEFAULT_ENV, {})
+    command = " ".join(getattr(args, "text", None) or []).strip()
+    if not command:
+        print("✗ which command? e.g. rh spawn terminal 'pytest -q' or rh spawn terminal -- python3 -m http.server", file=sys.stderr)
+        return 2
+    plan = spawn_mod.terminal_plan(root, env, command, split=getattr(args, "split", None))
+    preview = spawn_mod.terminal_preview(root, env, plan)
+    if getattr(args, "json", False):
+        ui.json_out({
+            "root": str(root), "terminal": True, "argv": plan["argv"],
+            "command": preview["command"], "mode": preview["mode"], "log": preview["log"],
+            "shell": plan["shell"], "split": plan["split"],
+            "notes": plan["notes"], "spawned": False,
+        })
+        return 0
+    print(ui.banner("rh spawn terminal", f"project: {root}"))
+    print(f"{ui.colorize('shell:', ui.DIM)} {plan['shell']}"
+          f"  {ui.colorize('split:', ui.DIM)} {plan['split'] or '(not set — ask the user)'}"
+          f"  {ui.colorize('mode:', ui.DIM)} {preview['mode']}")
+    print(f"{ui.colorize('command:', ui.DIM)} {preview['command']}")
+    if preview.get("log"):
+        print(f"{ui.colorize('log:', ui.DIM)} {preview['log']}")
+    for note in plan["notes"] + preview.get("notes", []):
+        print(ui.colorize(f"⚠ {note}", ui.YELLOW))
+    if getattr(args, "dry_run", False):
+        return 0
+    result = spawn_mod.spawn_terminal_now(root, env, plan, preview)
+    if result.get("mode") == "pane":
+        ok = result.get("returncode", 0) == 0
+        print(ui.colorize(("✓ opened terminal pane via agents.spawn" if ok else "⚠ agents.spawn failed") + f" ({result['command']})", ui.GREEN if ok else ui.YELLOW))
+    else:
+        print(ui.colorize(f"✓ started terminal pid {result.get('pid')} → {result.get('log','')}", ui.GREEN))
+    return 0
+
+
+@with_root
+def cmd_agent_status(args, root: Path):
+    """`rh agent status` — who is running, on which model, from .rh/logs/spawns.jsonl."""
+    f = paths.logs_dir(root) / "spawns.jsonl"
+    rows: list[dict] = []
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+    if getattr(args, "json", False):
+        ui.json_out(rows)
+        return 0
+    print(ui.banner("Agent status", f"root: {root}"))
+    if not rows:
+        print(ui.colorize("No spawns recorded yet — `rh spawn <role>` writes .rh/logs/spawns.jsonl.", ui.DIM))
+        return 0
+    for r in rows:
+        alive = ""
+        pid = r.get("pid")
+        if pid:
+            try:
+                os.kill(pid, 0); alive = "alive"
+            except OSError:
+                alive = "dead"
+        print(f"  {r.get('role','?'):12} pid={pid} ({alive}) model={r.get('model') or '—'} mode={r.get('mode')} ts={r.get('ts','')}")
+    return 0
+
+
+@with_root
+def cmd_gate_check(args, root: Path):
+    """`rh gate check [--json]` — machine-readable gate report (same as phase_gate)."""
+    env = config.load_env(root)
+    gate = config.phase_gate(root, env)
+    if getattr(args, "json", False):
+        ui.json_out(gate)
+        return 0 if gate["ok"] else 1
+    print(ui.banner("Gate check", f"root: {root}"))
+    print(f"  phase: {gate['phase']}  ok: {gate['ok']}")
+    for p in gate["problems"]:
+        print(ui.colorize(f"  - {p}", ui.YELLOW))
+    return 0 if gate["ok"] else 1
+
+
+@with_root
+def cmd_log_tail(args, root: Path):
+    """`rh log tail [N]` — read the newest §7 event log without opening files."""
+    logs_dir = paths.logs_dir(root)
+    n = int(getattr(args, "n", None) or 20)
+    files = sorted(logs_dir.glob("*.md"), key=lambda p: p.stat().st_mtime) if logs_dir.is_dir() else []
+    if getattr(args, "json", False):
+        out = []
+        for f in files[-n:]:
+            out.append({"file": str(f), "text": f.read_text(encoding="utf-8")[:4000]})
+        ui.json_out(out)
+        return 0
+    if not files:
+        print(ui.colorize("No event logs yet in .rh/logs/ (use `rh add log` per SKILL.md §7).", ui.DIM))
+        return 0
+    for f in files[-n:]:
+        print(ui.colorize(f"=== {f.name} ===", ui.BOLD))
+        print(f.read_text(encoding="utf-8")[:2000])
+        print()
+    return 0
+
+
+@with_root
+def cmd_handoff(args, root: Path):
+    """`rh handoff [--file NAME]` — pack STATUS.md + PLAN.md + checklist for a fresh session."""
+    data = checklist_mod.build_checklist(root)
+    lines = [
+        f"# Handoff — {data['phase_name']} (rule 14)",
+        f"root: {root}",
+        "",
+        "## Checklist",
+    ]
+    for item in data["items"]:
+        lines.append(f"- [{item['status']}] {item['label']} ({item['ref']})")
+    lines += ["", "## ENV tail (environment notes)"]
+    lines.append(config.load_tail(root) or "(none)")
+    for name in ("STATUS.md", "PLAN.md"):
+        if paths.rh_dir(root).exists():
+            try:
+                text = paths.artifact_path(root, name).read_text(encoding="utf-8")
+            except OSError:
+                text = "(missing)"
+        else:
+            text = "(missing)"
+        lines += ["", f"## {name}", text or "(empty)"]
+    out = "\n".join(lines) + "\n"
+    fname = getattr(args, "file", None) or ".rh/HANDOFF.md"
+    dest = root / fname if not fname.startswith("/") else Path(fname)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(out, encoding="utf-8")
+    if getattr(args, "json", False):
+        ui.json_out({"file": str(dest), "phase": data["phase_name"], "pending": data["pending"]})
+        return 0
+    print(ui.colorize(f"✓ wrote {dest} — start a fresh session and read it first (rule 14)", ui.GREEN))
+    return 0
+
+
+@with_root
 def cmd_spawn(args, root: Path):
     """`rh spawn <role> [instructions]` — open another role agent with the ENV.md command."""
     if not paths.rh_dir(root).exists():
@@ -744,14 +1142,16 @@ def cmd_spawn(args, root: Path):
     env = config.load_env(root)
     role = (args.agent or "").strip().lower()
     if not role:
-        print("✗ which role? " + " | ".join(spawn_mod.ROLES), file=sys.stderr)
+        known_roles = agents_mod.list_roles(root)
+        print("✗ which role? " + " | ".join(known_roles), file=sys.stderr)
         return 2
     commands = (env.get("agents") or {}).get("commands") or {}
-    known = set(spawn_mod.ROLES) | ({str(k).lower() for k in commands} if isinstance(commands, dict) else set())
+    known = set(agents_mod.list_roles(root)) | ({str(k).lower() for k in commands} if isinstance(commands, dict) else set())
     if role not in known:
-        print(ui.colorize(f"✗ unknown role {role!r} — roles: {', '.join(spawn_mod.ROLES)}", ui.RED),
+        print(ui.colorize(f"✗ unknown role {role!r} — roles come from .rh/agents/<role>.md and agents.commands.<role>", ui.RED),
               file=sys.stderr)
-        print(ui.colorize(f"  define your own: rh env set agents.commands.{role}='pi --model {{model}}'",
+        print(ui.colorize(f"  define your own: rh env set agents.commands.{role}='pi --model {{model}} --system-prompt-file {{agent_file}}' "
+                          f"and write .rh/agents/{role}.md (rh agents {role} --write scaffolds it)",
                           ui.DIM), file=sys.stderr)
         return 2
     extra = " ".join(getattr(args, "text", None) or []).strip()
@@ -776,6 +1176,12 @@ def cmd_spawn(args, root: Path):
             print(ui.colorize(f"✗ {plan['error']}", ui.RED), file=sys.stderr)
         for note in plan["notes"]:
             print(ui.colorize(f"⚠ {note}", ui.YELLOW), file=sys.stderr)
+        return 1
+    # Budget: agents.count is a ceiling on concurrent agents (SKILL.md §5).
+    budget = int((env.get("agents") or {}).get("count") or 1)
+    running = spawn_mod.running_count(root)
+    if running >= budget and not getattr(args, "force", False):
+        print(ui.colorize(f"✗ agents.count={budget} reached ({running} running) — close one (rule 13) or pass --force", ui.RED), file=sys.stderr)
         return 1
     preview = spawn_mod.spawn_preview(root, env, role, plan)
     notes = plan["notes"] + preview["notes"]
@@ -920,9 +1326,13 @@ def build_parser():
     p.add_argument("-r", "--resume", action="store_true", help="shortcut for `rh resume` (spawn harness + go-forward prompt)")
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    s = sub.add_parser("init", help="create .rh/ layout", parents=[common])
+    s = sub.add_parser("init", help="create .rh/ layout (non-destructive; --force archives first, --dry-run previews)",
+                       parents=[common])
     s.add_argument("--slug", default=None)
-    s.add_argument("--clean", action="store_true")
+    s.add_argument("--clean", action="store_true", help="remove .rh/ first (with --force, archives first)")
+    s.add_argument("--force", action="store_true", help="archive existing ENV.md/tasks.json to .rh/.bak/<timestamp>/ and start fresh")
+    s.add_argument("--dry-run", action="store_true", help="preview what would be written without writing")
+    s.add_argument("--non-interactive", action="store_true", help="skip the questionnaire (agents/CI)")
     s.set_defaults(func=cmd_init)
 
     s = sub.add_parser("env", help="environment config", parents=[common])
@@ -995,15 +1405,58 @@ def build_parser():
 
     s = sub.add_parser("spawn", help="open another role agent with the launch command from .rh/ENV.md",
                        parents=[common])
-    s.add_argument("agent", help="role: orchestrator | literature | researcher | reviewer | critique | writer, "
-                                "or any agents.commands.<role> key")
+    s.add_argument("agent", help="role (a .rh/agents/<role>.md file and/or agents.commands.<role> key), "
+                                "e.g. researcher; 'terminal' means `rh spawn terminal <cmd>` for a shell pane")
     s.add_argument("text", nargs="*", help="instructions for that agent (joined into one prompt)")
     s.add_argument("--prompt", default=None, help="instructions instead of the positional form")
     s.add_argument("--prompt-file", dest="prompt_file", default=None,
                    help="read the instructions from a markdown file (examples/prompts/*.md)")
     s.add_argument("--inline", action="store_true", help="run the agent in this terminal instead of a new pane/process")
     s.add_argument("--dry-run", action="store_true", help="print the command + role prompt without starting anything")
+    s.add_argument("--split", default=None, choices=["vertical", "horizontal", "window"], help="pane layout override for this spawn (default: agents.split)")
+    s.add_argument("--force", action="store_true", help="ignore agents.count budget (waiver → STATUS.md)")
     s.set_defaults(func=cmd_spawn)
+
+    s = sub.add_parser("spawn-terminal", help="open a plain shell terminal in a new pane (shell from agents.shell/$SHELL, layout from agents.split)",
+                       parents=[common])
+    s.add_argument("text", nargs="*", help="command to run in the new terminal")
+    s.add_argument("--split", default=None, choices=["vertical", "horizontal", "window"], help="pane layout override (default: agents.split)")
+    s.add_argument("--dry-run", action="store_true", help="print the shell + split + command without starting anything")
+    s.set_defaults(func=cmd_spawn_terminal)
+    # alias handled in main(): `rh spawn terminal <cmd>` → spawn-terminal
+
+    s = sub.add_parser("checklist", help="live Orchestrator checklist: SKILL.md §0 rules + phase exit gates",
+                       parents=[common])
+    s.set_defaults(func=cmd_checklist)
+
+    s = sub.add_parser("doctor", help="verify the binaries, shells, templates and role files ENV.md names",
+                       parents=[common])
+    s.set_defaults(func=cmd_doctor)
+
+    s = sub.add_parser("agent", help="agent helpers: `rh agent status`", parents=[common])
+    asub = s.add_subparsers(dest="a", required=True)
+    ast = asub.add_parser("status", parents=[common]); ast.set_defaults(func=cmd_agent_status)
+
+    s = sub.add_parser("gate", help="`rh gate check` — machine-readable gate report", parents=[common])
+    gsub = s.add_subparsers(dest="g", required=True)
+    gc = gsub.add_parser("check", parents=[common]); gc.set_defaults(func=cmd_gate_check)
+
+    s = sub.add_parser("log", help="`rh log tail [N]` — newest §7 event logs", parents=[common])
+    lsub = s.add_subparsers(dest="l", required=True)
+    lt = lsub.add_parser("tail", parents=[common])
+    lt.add_argument("n", nargs="?", default=None, help="how many logs (default 20)")
+    lt.set_defaults(func=cmd_log_tail)
+
+    s = sub.add_parser("handoff", help="pack STATUS + PLAN + checklist for a fresh session (rule 14)",
+                       parents=[common])
+    s.add_argument("--file", default=None, help="output file (default: .rh/HANDOFF.md)")
+    s.set_defaults(func=cmd_handoff)
+
+    s = sub.add_parser("agents", help="list / show / write the per-role agent files (.rh/agents/<role>.md)",
+                       parents=[common])
+    s.add_argument("role", nargs="?", default=None, help="one role to show (e.g. researcher)")
+    s.add_argument("--write", action="store_true", help="write default role files (all roles, or just ROLE when given)")
+    s.set_defaults(func=cmd_agents)
 
     s = sub.add_parser("info", help="describe an artifact: what it is for, owner, sections, template",
                        parents=[common])
@@ -1022,12 +1475,17 @@ def build_parser():
 
 
 KNOWN_CMDS = {"init", "env", "add", "search", "tasks", "status", "workflow", "phase", "plan",
-              "describe", "resume", "spawn", "info", "skill"}
+              "describe", "resume", "spawn", "spawn-terminal", "info", "skill", "agents", "checklist", "doctor", "agent", "gate", "log", "handoff"}
 
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    # `rh -r [flags...]` (no subcommand) → `rh resume [flags...]`
+    # `rh [--root DIR] spawn terminal <cmd>` → `rh [--root DIR] spawn-terminal <cmd>`
+    # (root flags may precede the subcommand, so only the adjacent pair matches)
+    for _i in range(len(argv) - 1):
+        if argv[_i] == "spawn" and argv[_i + 1] == "terminal":
+            argv = argv[:_i] + ["spawn-terminal"] + argv[_i + 2:]
+            break
     if not (set(argv) & KNOWN_CMDS) and ("-r" in argv or "--resume" in argv):
         argv = ["resume", *[a for a in argv if a not in ("-r", "--resume")]]
     args = build_parser().parse_args(argv)

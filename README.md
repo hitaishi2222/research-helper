@@ -56,7 +56,9 @@ nothing else to download.
 ## Quickstart
 
 ```bash
-rh init --slug my-project
+rh init --slug my-project        # non-destructive; asks a few questions, s=skip
+rh init --dry-run                # preview without writing
+rh init --force                  # archive existing ENV.md/tasks.json to .rh/.bak/ and start fresh
 rh env set agents.count=2 agents.backend=tmux agents.cli=pi \
   agents.skills=research-helper,crw literature.search=crw project.git=true
 rh env show                 # config as a table, validated
@@ -96,7 +98,10 @@ A tool on `PATH` does not mean this project should use it.
 | `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh plan import [--dry-run]` | mirror `PLAN.md` steps into `tasks.json` |
 | `rh resume` / `rh -r` | run the orchestrator **in this terminal** — model + thinking level from `agents.roles.orchestrator`, command from `agents.commands.orchestrator`, only `agents.skills` loaded |
-| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/ENV.md`; `--inline`, `--dry-run`, `--prompt-file` |
+| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/ENV.md`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
+| `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |
+| `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` scaffolds them |
+| `rh checklist` | live Orchestrator checklist (SKILL.md §0 rules + phase exit gates) |
 | `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
 | `rh describe [--json]` | the AI map: layout, phases, env keys, artifacts, spawn, budget |

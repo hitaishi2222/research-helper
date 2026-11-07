@@ -5,6 +5,8 @@ Priority: explicit --root, RH_ROOT, cwd walk-up for `.rh/` (ENV.md is inside .rh
 from __future__ import annotations
 
 import os
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 RH_DIR = ".rh"
@@ -42,6 +44,15 @@ def resolve_root(cli_root: str | None = None) -> Path:
 
 def rh_dir(root: Path) -> Path:
     return root / RH_DIR
+
+
+def backup_file(root: Path, path: Path) -> Path:
+    """Archive `path` to `.rh/.bak/<timestamp>/<name>`, return the backup copy."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = rh_dir(root) / ".bak" / stamp / path.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, dest)
+    return dest
 
 
 def ensure_layout(root: Path) -> Path:

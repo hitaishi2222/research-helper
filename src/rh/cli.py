@@ -1273,7 +1273,16 @@ def cmd_plan_import(args, root: Path):
         return 0
     if not added:
         plan = paths.artifact_path(root, "PLAN.md")
-        text = plan.read_text(encoding="utf-8") if plan.exists() else ""
+        if not plan.exists():
+            print(
+                ui.colorize(
+                    f"no PLAN.md yet at {plan} — nothing to import. The user or an agent "
+                    "writes it (`rh info PLAN.md` shows the shapes it understands).",
+                    ui.DIM,
+                )
+            )
+            return 0
+        text = plan.read_text(encoding="utf-8")
         if text.strip() and not tasks_mod.parse_plan_steps(text):
             print(
                 ui.colorize(

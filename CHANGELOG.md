@@ -4,6 +4,21 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.1.5] — unreleased (open)
+
+Small fixes found while running the CLI against a real project. Add to this section
+until the user names a release.
+
+### Fixed
+
+- `rh plan import` with no `PLAN.md` said "PLAN.md and the board agree", which is
+  wrong twice: nothing was compared and nothing was imported. It now says there is
+  no plan yet and points at `rh info PLAN.md` for the shapes it understands.
+- `rh search` walked `.rh/.bak/` and `.rh/tmp/`, so a superseded file's line came
+  back ahead of the live one (`rh add` / `rh env set` archives made every query
+  noisier over time). Archives and transient render output are skipped now; logs
+  and notes are still searched — they are the project's written record.
+
 ## [0.1.4] — 2026-11-07
 
 A plan written in ordinary Markdown, no planners if you don't want them, and the

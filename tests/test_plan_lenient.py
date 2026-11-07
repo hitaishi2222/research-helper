@@ -242,3 +242,32 @@ def test_env_show_prints_the_environment_table(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Project environment" in out
     assert "numpy" in out and "2.3.5" in out and "arrays" in out
+
+
+def test_missing_plan_says_there_is_no_plan(tmp_path, capsys):
+    run(["--root", str(tmp_path), "init"])
+    (tmp_path / ".rh" / "PLAN.md").unlink(missing_ok=True)
+    capsys.readouterr()
+    assert run(["--root", str(tmp_path), "plan", "import"]) == 0
+    out = capsys.readouterr().out
+    assert "no PLAN.md yet" in out
+    assert "board agree" not in out
+
+
+# --- rh search: archives are not answers ---------------------------------------
+
+def test_search_skips_archives_and_reads_live_artifacts(tmp_path):
+    from rh import search
+    rh = tmp_path / ".rh"
+    rh.mkdir()
+    (rh / "STATUS.md").write_text("live: numpy 2.3.5 recorded here\n", encoding="utf-8")
+    bak = rh / ".bak" / "20260101-000000"
+    bak.mkdir(parents=True)
+    (bak / "STATUS.md").write_text("stale: numpy 1.0.0 from the archive\n", encoding="utf-8")
+    (rh / "tmp").mkdir()
+    (rh / "tmp" / "note.md").write_text("transient numpy render\n", encoding="utf-8")
+
+    names = {str(p.relative_to(tmp_path)) for p in search.candidate_files(tmp_path)}
+    assert ".rh/STATUS.md" in names
+    assert not any(n.startswith(".rh/.bak") for n in names)
+    assert not any(n.startswith(".rh/tmp") for n in names)

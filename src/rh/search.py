@@ -14,6 +14,11 @@ from pathlib import Path
 from . import paths
 
 SEARCHABLE_SUFFIXES = {".md", ".txt", ".json", ".bib", ".tex"}
+
+# Not search targets: `.bak/` is the archive of superseded files (searching it returns
+# yesterday's answer next to today's) and `tmp/` is transient render output. Logs and
+# notes ARE searched — they are the project's written record.
+SKIP_DIRS = {".bak", "tmp"}
 SEARCHABLE_NAMES = {"ENVIRONMENT.md", "CHECKLIST.md", "PROBLEM.md", "PLAN.md", "STATUS.md",
                     "LITERATURE.md", "OUTPUT_LAYOUT.md", "GAPS.md", "MANUSCRIPT.md",
                     "tasks.json", "env.json"}
@@ -45,6 +50,8 @@ def candidate_files(root: Path) -> list[Path]:
     rh = paths.rh_dir(root)
     if rh.exists():
         for p in rh.rglob("*"):
+            if SKIP_DIRS & set(p.relative_to(rh).parts[:-1]):
+                continue
             if p.is_file() and p.suffix in SEARCHABLE_SUFFIXES:
                 files.append(p)
     for name in SEARCHABLE_NAMES - {"tasks.json", "env.json"}:

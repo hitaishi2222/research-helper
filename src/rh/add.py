@@ -1,7 +1,7 @@
 """`rh add` — append under a heading/DOI, creating it if missing.
 
 Targets:
-  note        -> .rh/notes/<slug>.md        (heading-created files)
+  note        -> .rh/notes/<title-token>.md  (heading-created files)
   literature  -> LITERATURE.md  (SKILL.md §3: citation + DOI + take/reject)
   layout      -> OUTPUT_LAYOUT.md  (SKILL.md §3: output skeleton + paper patterns)
   gaps        -> GAPS.md
@@ -9,7 +9,7 @@ Targets:
   plan        -> PLAN.md
   status      -> STATUS.md
   manuscript  -> MANUSCRIPT.md
-  log         -> .rh/logs/YYYY-MM-DD-HHMM-<role>-<slug>.md
+  log         -> .rh/logs/YYYY-MM-DD-HHMM-<role>-<title-token>.md
   task        -> .rh/tasks.json via TaskStore
 """
 from __future__ import annotations

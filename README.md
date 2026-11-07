@@ -56,7 +56,7 @@ nothing else to download.
 ## Quickstart
 
 ```bash
-rh init --slug my-project        # non-destructive; asks a few questions (Enter keeps ENV.md's values, s=skip)
+rh init                          # in the project directory; asks a few questions (Enter keeps values, s=skip)
 rh init --dry-run                # preview without writing anything, not even the prompt files
 rh init --force                  # archive a copy of ENV.md/tasks.json to .rh/.bak/ before writing
 rh init --clean                   # archive the whole .rh/ (event logs, notes) then recreate it
@@ -81,7 +81,7 @@ A tool on `PATH` does not mean this project should use it.
 
 | Command | What it does |
 |---|---|
-| `rh init [--slug NAME] [--force] [--clean] [--dry-run]` | create the `.rh/` workspace, non-destructively (archives before writing or removing) |
+| `rh init [--force] [--clean] [--dry-run]` | create the `.rh/` workspace **here**, non-destructively (archives before writing or removing); the project name is the directory, changeable with `rh env set project.name=` |
 | `rh env show` | print config as a table + environment notes, validate |
 | `rh env set KEY=VALUE ...` | set any key from the §2 schema (`rh env list`) |
 | `rh env list` | every settable key, type, choices, help |
@@ -126,7 +126,7 @@ rh resume            # → pi --model glm-5 --thinking high --skill research-hel
 rh spawn researcher "read S07 and implement it"
 ```
 
-Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {slug} {provider}
+Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {name} {provider}
 {model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template that
 omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your ENV.md
 is not being honoured instead of guessing a flag. With no `agents.spawn` the agent

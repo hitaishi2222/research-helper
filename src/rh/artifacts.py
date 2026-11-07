@@ -29,7 +29,7 @@ ARTIFACTS: dict[str, dict] = {
                     "    \"spawn\": \"tmux new-window -n rh-{agent} -c {root} {command}\"},\n"
                     "  \"literature\": {\"search\": \"crw\", \"reading\": \"lit\",\n"
                     "                 \"ref_manager\": \"none\", \"paywall\": \"ask_user\"},\n"
-                    "  \"project\": {\"slug\": \"<kebab-case>\", \"git\": false},\n"
+                    "  \"project\": {\"name\": \"<project name>\", \"git\": false},\n"
                     "  \"gates\": {\"user_approves_plan\": true, \"critique_veto\": true}\n"
                     "}\n\n## Environment\n\n- meep 1.29.0 — FDTD (user-confirmed)",
         "rules": [
@@ -57,7 +57,7 @@ ARTIFACTS: dict[str, dict] = {
             "## Constraints — time, hardware, data licence",
             "## Out of scope — explicit exclusions",
         ],
-        "template": "# Problem — <slug>\n\n## Question\n<one sentence>\n\n## Why it matters\n...\n\n"
+        "template": "# Problem — <project name>\n\n## Question\n<one sentence>\n\n## Why it matters\n...\n\n"
                     "## Success criteria\n- <measurable>\n\n## Falsifier\n<what would refute it>\n\n"
                     "## Constraints\n- <time/hardware/licence>\n\n## Out of scope\n- <excluded>",
         "rules": [
@@ -178,7 +178,7 @@ ARTIFACTS: dict[str, dict] = {
             "blockers · open questions for user (numbered, answerable in one line)",
             "history — one line per step transition, timestamped",
         ],
-        "template": "# Status — <project slug>\nphase: 6 IMPLEMENT | step: S07 | updated: <ISO>\n"
+        "template": "# Status — <project name>\nphase: 6 IMPLEMENT | step: S07 | updated: <ISO>\n"
                     "agents: orchestrator=<model>  researcher=<model>  (backend: tmux window 2)\n"
                     "blockers: none\nopen questions for user: (numbered, answerable in one line)\n"
                     "history:\n- <ISO> S06 done, tests green (24 passed), results/S06.csv",

@@ -54,7 +54,7 @@ def next_tasks(store: TaskStore) -> list[dict]:
 
 
 def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str = "") -> str:
-    slug = env.get("project", {}).get("slug") or "untitled"
+    project_name = env.get("project", {}).get("name") or "untitled"
     agents = env.get("agents", {}) or {}
     skills = agents.get("skills") or ["research-helper"]
     orch = (agents.get("roles") or {}).get("orchestrator") or {}
@@ -68,7 +68,7 @@ def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str
         session += f" · thinking: {thinking}"
     current = gate["phase"]
     lines = [
-        f"You are the Orchestrator for the research project '{slug}'.",
+        f"You are the Orchestrator for the research project '{project_name}'.",
         f"Project root (verify you are here before writing anything): {root}",
         f"Session model (agents.roles.orchestrator): {session}",
         "",

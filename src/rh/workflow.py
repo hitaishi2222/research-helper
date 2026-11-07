@@ -232,7 +232,7 @@ def render_ascii(root: Path, mermaid_src: str) -> tuple[str | None, str | None]:
     for tool in tools:
         argv = _argv(ASCII_TOOLS[tool], file=tmp)
         try:
-            proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False)
         except (subprocess.TimeoutExpired, OSError):
             continue
         if proc.returncode != 0 or not proc.stdout.strip():
@@ -254,7 +254,8 @@ def render_ascii(root: Path, mermaid_src: str) -> tuple[str | None, str | None]:
 
 def render_via(tool: str, mermaid: str) -> str | None:
     try:
-        proc = subprocess.run([tool], input=mermaid, capture_output=True, text=True, timeout=10)
+        proc = subprocess.run([tool], input=mermaid, capture_output=True, text=True,
+                              timeout=10, check=False)
         return proc.stdout if proc.returncode == 0 else None
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -291,7 +292,7 @@ def render_image(root: Path, mermaid_src: str, *, fmt: str = "svg",
         out.unlink(missing_ok=True)
         try:
             proc = subprocess.run(_argv(DIAGRAM_TOOLS[tool], file=mmd, out=out, fmt=fmt),
-                                  capture_output=True, text=True, timeout=60)
+                                  capture_output=True, text=True, timeout=60, check=False)
         except (subprocess.TimeoutExpired, OSError) as e:
             errors.append(f"{tool}: {e}")
             continue

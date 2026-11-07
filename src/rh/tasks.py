@@ -45,12 +45,14 @@ class TaskStore:
 
     def load(self) -> dict:
         if not self.file.exists():
-            return {"version": 1, "project_slug": "", "current_phase": 0, "tasks": []}
+            return {"version": 1, "project_name": "", "current_phase": 0, "tasks": []}
         try:
             data = json.loads(self.file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            return {"version": 1, "project_slug": "", "current_phase": 0, "tasks": []}
+            return {"version": 1, "project_name": "", "current_phase": 0, "tasks": []}
         data.setdefault("tasks", [])
+        if "project_slug" in data:  # renamed in 0.2
+            data.setdefault("project_name", data.pop("project_slug"))
         data.setdefault("current_phase", 0)
         for t in data["tasks"]:
             if not isinstance(t.get("phase"), int):

@@ -125,7 +125,7 @@ installed on the machine. A binary on PATH does not mean this project should use
     "commands": {
       // how an agent CLI is STARTED — asked for, never invented. rh substitutes
       // the placeholders below; every {model} {thinking} {skills} {prompt}
-      // {prompt_file} {agent_file} {root} {slug} {role} must be written by the user/you.
+      // {prompt_file} {agent_file} {root} {name} {role} must be written by the user/you.
       // {agent_file} is .rh/agents/<role>.md — put it in the harness's
       // system-prompt flag for that CLI (e.g. pi: --system-prompt-file {agent_file};
       // claude: --append-system-prompt-file {agent_file}; others: --system-file /
@@ -153,7 +153,7 @@ installed on the machine. A binary on PATH does not mean this project should use
     "search": "crw", // user-named search tool; any binary or service is valid
   },
   "project": {
-    "slug": "", // short kebab-case name
+    "name": "", // the project's name — a label in prompts and status
     "git": false, // true only if user says the project is already a repo
   },
   "gates": {
@@ -164,7 +164,7 @@ installed on the machine. A binary on PATH does not mean this project should use
 ```
 
 Interview order (batch 2–3 unrelated keys per question; show the resulting block before
-moving on): project root → slug → **how many parallel agents the user wants for planning and
+moving on): project root → name → **how many parallel agents the user wants for planning and
 research (1..4)** → backend → agent CLI → **the exact launch command for that CLI** (model,
 thinking level, how a skill is selected; write `{model}` `{thinking}` `{skills}` `{prompt}`
 wherever the flag goes) → the command that opens a pane (`agents.spawn`) → skills to read →
@@ -188,7 +188,7 @@ Every phase states its **exit gate**. Do not enter the next phase with an unmet 
 
 ### Phase 0 — CONFIG → `.rh/ENV.md` config block
 
-`rh init` walks a short questionnaire (slug, agent count, backend, CLI, shell,
+`rh init` walks a short questionnaire (name, agent count, backend, CLI, shell,
 split, skills). Defaults are the values already in ENV.md, so Enter keeps a
 configured project as it is; `s` really skips (`s` is never written as a value) —
 a skipped question is yours to ask later. It never overwrites existing files
@@ -439,7 +439,7 @@ When asking: state the action, why it is needed, the blast radius, and the alter
 Log only when something must be remembered — a decision, a dead end, a failed run, a plan
 change, a user override. Routine success is not logged; the artifacts already show it.
 
-`.rh/logs/YYYY-MM-DD-HHMM-<role>-<slug>.md`:
+`.rh/logs/YYYY-MM-DD-HHMM-<role>-<title-token>.md`:
 
 ```
 # <title>
@@ -469,7 +469,7 @@ writes after asking (free-form; any tool the user names is valid):
 `STATUS.md`
 
 ```
-# Status — <project slug>
+# Status — <project name>
 phase: 6 IMPLEMENT | step: S07 | updated: <ISO timestamp>
 agents: orchestrator=<model>  researcher=<model>  (backend: tmux window 2)
 blockers: none
@@ -556,7 +556,7 @@ Commands agents use per phase:
 
 | Command | Phase | Notes |
 |---|---|---|
-| `rh init [--slug NAME] [--force] [--dry-run] [--non-interactive]` | 0 | creates the `.rh/` layout non-destructively (never overwrites without `--force` backup); skippable questionnaire per §2 |
+| `rh init [--force] [--dry-run] [--non-interactive]` | 0 | creates the `.rh/` layout in this directory, non-destructively (never overwrites without `--force` backup); project name = the directory, changeable with `rh env set project.name=`; skippable questionnaire per §2 |
 | `rh env show` / `env list` | 0–2 | read and validate the config block + environment notes |
 | `rh env set KEY=VALUE ...` | 0 | writes `.rh/ENV.md`'s block **and** the `.rh/env.json` mirror; preserves the notes below it |
 | `rh add note\|literature\|gaps\|log <h> -m "..."` | 3+ | appends under a heading, creating it if missing; literature accepts a DOI |
@@ -615,7 +615,7 @@ Contracts that keep the two layers consistent:
 7. **Launch commands are configuration, not code.** `rh` hardcodes no agent
    flag: `agents.commands.<role>` and `agents.spawn` in `.rh/ENV.md` are the
    source, and `rh` only substitutes `{model}` `{thinking}` `{skills}` `{prompt}`
-   `{prompt_file}` `{agent_file}` `{root}` `{slug}` `{role}` (`{command}` in `agents.spawn`; the shell
+   `{prompt_file}` `{agent_file}` `{root}` `{name}` `{role}` (`{command}` in `agents.spawn`; the shell
    for terminal mode and the pane layout come from `agents.shell`/`agents.split`, asked
    of the user). The role file (`.rh/agents/<role>.md`, via `{agent_file}`) is how
    each specialized agent gets its tailored system prompt — rh only substitutes the

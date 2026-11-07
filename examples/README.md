@@ -17,7 +17,7 @@ Two different placeholder styles, deliberately different so they never collide:
 
 | Where | Style | Who fills it |
 |---|---|---|
-| `agents.commands.<role>`, `agents.spawn` (`.rh/ENV.md`) | `{model}` `{thinking}` `{skills}` `{prompt}` `{prompt_file}` `{root}` `{slug}` `{role}` `{command}` | `rh` (from the config block) |
+| `agents.commands.<role>`, `agents.spawn` (`.rh/ENV.md`) | `{model}` `{thinking}` `{skills}` `{prompt}` `{prompt_file}` `{root}` `{name}` `{role}` `{command}` | `rh` (from the config block) |
 | These example scripts / prompt templates | `{{STEP}}` `{{TASK}}` `{{DELIVERABLE}}` `{{VERIFY}}` | you, the agent, with `sed`/`envsubst` before calling `rh spawn` |
 
 `${HOME}`-style shell variables survive untouched; only `{lowercase}` braces are

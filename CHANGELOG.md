@@ -4,7 +4,7 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.2] — 2026-11-07
 
 Delegation, config honesty and artifact documentation (from the ISSUES list).
 
@@ -65,6 +65,11 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
   `{prompt}` in a command template is a config warning immediately, not only
   at spawn.
 - **`examples/envs/{pi,claude,codex}.sh`** — the only place harness flags live.
+- **`rh init` takes no project name.** It initializes the directory you run it
+  in and names the project after that directory (a label only — no directory is
+  created, no `--slug` flag). Rename it with `rh env set project.name=...`; the
+  questionnaire may override it. `project.slug` is read as `project.name` and
+  migrated on the next write.
 - **`rh init` is non-destructive.** Existing `ENV.md`/`tasks.json` block init
   unless `--force`, which archives a *copy* to `.rh/.bak/<timestamp>/` first
   (originals and their environment notes stay put). `--clean` archives the whole
@@ -102,7 +107,7 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
 - **`DEFAULT_ENV` was mutated by `config.load_env()`.** `deep_merge` shared nested
   dicts with the defaults, so any `env set` on a key missing from ENV.md edited
   the process-wide defaults for everything that ran afterwards. Now deep-copied.
-- **`rh init` skip wrote `"s"`.** `s` was stored as the value: `project.slug="s"`,
+- **`rh init` skip wrote `"s"`.** `s` was stored as the value: `project.name="s"`,
   `agents.backend="s"`, `skills=["s"]` — an invalid config. Skip is now absent.
 - **`rh init --clean` deleted without archiving** (and `--clean --force` archived
   nothing, since the removal ran first). The archive now happens before any
@@ -213,5 +218,6 @@ with `researchhelper`).
 - `rh resume` / `rh -r`, `rh skill install`, bundled `research-helper` skill.
 - rich-based UI with `--json` on every command.
 
+[0.1.2]: https://github.com/hitaishi2222/research-helper/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/hitaishi2222/research-helper/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hitaishi2222/research-helper/releases/tag/v0.1.0

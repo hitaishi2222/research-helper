@@ -50,7 +50,7 @@ DEFAULT_ENV: dict = {
         "paywall": "ask_user",  # ask_user | skip
         "search": "crw",  # crw | agent-browser | obscura | <binary>
     },
-    "project": {"slug": "", "git": False},
+    "project": {"name": "", "git": False},
     "gates": {"user_approves_plan": True, "critique_veto": True},
 }
 
@@ -82,7 +82,7 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
     ("literature.reading", "str", (), "reader the user names (e.g. lit, pdftotext, images)"),
     ("literature.paywall", "str", PAYWALL_POLICIES, "ask_user | skip (proceed without paper)"),
     ("literature.search", "str", (), "search tool the user names (e.g. crw, agent-browser, any binary)"),
-    ("project.slug", "str", (), "short kebab-case name"),
+    ("project.name", "str", (), "the project's name — a label in prompts and status (blank = not named yet)"),
     ("project.git", "bool", (True, False), "true only if the project is already a repo"),
     ("gates.user_approves_plan", "bool", (True, False), "user approves PLAN.md before implementation"),
     ("gates.critique_veto", "bool", (True, False), "Critique can veto the critique gate"),
@@ -101,8 +101,18 @@ ENV_PATTERNS: list[tuple[re.Pattern, str, str, str]] = [
 ]
 
 
+# Renamed keys, still accepted so old notes and scripts keep working.
+KEY_ALIASES = {"project.slug": "project.name"}
+
+
+def resolve_key(key: str) -> str:
+    """Map a renamed key to its current spelling (`project.slug` → `project.name`)."""
+    return KEY_ALIASES.get(key, key)
+
+
 def schema_for(key: str) -> tuple[str, str, tuple, str] | None:
     """(key, kind, choices, help) for a settable key — static table first, then patterns."""
+    key = resolve_key(key)
     for entry in ENV_SCHEMA:
         if entry[0] == key:
             return entry
@@ -211,9 +221,11 @@ def validate(env: dict) -> list[str]:
     planners = env.get("agents", {}).get("planners", {}).get("models", [])
     if len(planners) >= 2 and planners[0] and planners[1] and planners[0] == planners[1]:
         problems.append("agents.planners.models must be two different models")
-    slug = env.get("project", {}).get("slug", "")
-    if slug and not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", slug):
-        problems.append(f"project.slug must be kebab-case, got {slug!r}")
+    name = env.get("project", {}).get("name", "")
+    if name is not None and not isinstance(name, str):
+        problems.append(f"project.name must be a string, got {name!r}")
+    elif isinstance(name, str) and "\n" in name:
+        problems.append("project.name must be a single line")
     lit = env.get("literature", {})
     # tool names are whatever the user names — never restricted to a known list
     for key in ("ref_manager", "reading", "search"):
@@ -326,17 +338,31 @@ def ensure_env_location(root: Path) -> Path:
     return target
 
 
+def _migrate(env: dict) -> dict:
+    """Read the old `project.slug` key as `project.name` (renamed in 0.2).
+
+    In memory only: the next `rh env set` writes the new key and the old one
+    disappears from ENV.md.
+    """
+    project = env.get("project")
+    if isinstance(project, dict) and "slug" in project:
+        old = project.pop("slug")
+        if not project.get("name"):  # a merged default name is empty, not a real name
+            project["name"] = old or ""
+    return env
+
+
 def load_env(root: Path) -> dict:
     """Load effective config: .rh/ENV.md block (truth) or .rh/env.json mirror or defaults."""
     env_md = ensure_env_location(root)
     if env_md.exists():
         parsed = parse_env_md(env_md)
         if parsed is not None:
-            return deep_merge(DEFAULT_ENV, parsed)
+            return _migrate(deep_merge(DEFAULT_ENV, parsed))
     mirror = paths.env_json(root)
     if mirror.exists():
         try:
-            return deep_merge(DEFAULT_ENV, json.loads(mirror.read_text()))
+            return _migrate(deep_merge(DEFAULT_ENV, json.loads(mirror.read_text())))
         except json.JSONDecodeError:
             pass
     return deep_merge(DEFAULT_ENV, {})

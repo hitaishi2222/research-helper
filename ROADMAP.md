@@ -124,6 +124,31 @@ Every item here removes a manual Orchestrator step. Ordered roughly by value.
 - [x] Concurrent budget enforcement from `agents.count` — track spawns in
   `.rh/logs/`; refuse the (count+1)th concurrent agent without `--force`.
 
+## v0.5 — Custom agents
+
+A role in `rh` is a file (`.rh/agents/<role>.md`) plus a launch command
+(`agents.commands.<role>`) and optionally a model (`agents.roles.<role>`).
+Today all three must be set one at a time, and only the starter roles are
+scaffolded by `rh agents --write`.
+
+- [ ] `rh agents new <role>` — create a custom role in one step: ask for the
+  one-line purpose, scaffold `.rh/agents/<role>.md` with it, then record
+  `agents.commands.<role>` (copy `agents.commands.default`, or ask for the
+  flags with the user) and `agents.roles.<role>.model` in `.rh/ENV.md`. Refuse
+  to overwrite an existing role file without `--force` (archive first).
+- [ ] `rh agents edit <role>` — open the role file, and show which ENV keys
+  belong to that role (command, model, thinking) so they are edited together.
+- [ ] `rh agents rm <role>` — archive the role file to `.rh/.bak/` and remove
+  `agents.commands.<role>` / `agents.roles.<role>`, refusing while that role
+  still owns open tasks.
+- [ ] `rh agents --write` scaffolds every role that has a command or a model in
+  ENV.md, not only the starter six (custom roles included).
+- [ ] `rh doctor` checks custom roles the same way as starter roles: file
+  present, command splittable, `{agent_file}` + `{prompt}` wired, model set —
+  and names any role that appears in one place but not the others.
+- [ ] `rh describe --json` lists each role with its file path, model and
+  command source, so an Orchestrator can see the roster without reading ENV.md.
+
 ## v0.5 — UX & retrieval
 
 - [ ] `rh status --watch` — live refresh while an agent works

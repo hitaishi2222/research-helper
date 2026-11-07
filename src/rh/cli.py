@@ -1,7 +1,7 @@
 """`rh` entry point.
 
 Commands:
-  rh init [--root DIR] [--slug NAME] [--clean]
+  rh init [--root DIR] [--force] [--clean] [--dry-run]
   rh env show | rh env set KEY=VALUE ... | rh env list
   rh add {note|literature|layout|gaps|problem|plan|status|manuscript} <heading|DOI> [-m BODY] [--file NAME]
   rh add log --role ROLE --title TITLE [-m BODY]
@@ -86,6 +86,10 @@ def cmd_init(args, root: Path):
     # Existing role files
     role_files = sorted((d / "agents").glob("*.md")) if (d / "agents").is_dir() else []
 
+    # The project name is the directory — no naming flag, no extra argument.
+    # Change it later with `rh env set project.name=...`; the questionnaire may override.
+    default_name = root.name
+
     # Non-destructive guard: existing files block without --force
     blocking = [str(f) for f in (env_file, tasks_file) if f.exists()]
     if blocking and not force and not args.clean:
@@ -104,13 +108,14 @@ def cmd_init(args, root: Path):
     if not args.non_interactive and not dry and not getattr(args, "json", False):
         answers, skipped = _init_questionnaire(args, root)
 
-    # Effective slug: flag wins, then questionnaire, then existing
-    slug = args.slug or answers.get("slug") or ""
+    # Effective name: questionnaire answer, else whatever ENV.md already has,
+    # else the directory name
+    name = answers.get("project.name") or ""
 
     if dry:
         if getattr(args, "json", False):
             ui.json_out({"root": str(root), "would_write": would_write, "dry_run": True,
-                         "slug": slug, "answers": answers, "skipped": skipped})
+                         "name": name, "answers": answers, "skipped": skipped})
             return 0
         print(ui.banner("rh init (dry-run)", f"{root}"))
         for w in would_write:
@@ -118,8 +123,12 @@ def cmd_init(args, root: Path):
         if role_files:
             for rf in role_files:
                 print(f"  would keep role file {rf}")
-        if slug:
-            print(f"  would set project.slug={slug}")
+        existing_name = ""
+        if env_file.exists():
+            parsed = config.parse_env_md(env_file) or {}
+            project = parsed.get("project") or {}
+            existing_name = str(project.get("name") or project.get("slug") or "")
+        print(f"  would set project.name={name or existing_name or default_name}")
         if answers:
             print(f"  questionnaire answers: {answers}")
         if skipped:
@@ -140,18 +149,20 @@ def cmd_init(args, root: Path):
     d = paths.ensure_layout(root)
     tasks_mod.TaskStore(root).load()  # ensure tasks.json shape exists lazily
 
-    # ENV.md: created when missing, updated with the slug/questionnaire answers,
+    # ENV.md: created when missing, updated with the name/questionnaire answers,
     # otherwise left as it is (environment notes stay put)
-    if slug or answers or not env_file.exists():
+    if name or answers or not env_file.exists():
         env = config.load_env(root)
-        if slug:
-            env["project"]["slug"] = slug
+        if name:
+            env.setdefault("project", {})["name"] = name
+        elif not (env.get("project") or {}).get("name"):
+            env.setdefault("project", {})["name"] = default_name
         for key, val in answers.items():
             if not key.startswith(("agents.", "project.")):
                 continue
             try:
                 config.set_nested(env, key, config.coerce_value(val, config.schema_for(key)[1]))
-            except Exception:
+            except (KeyError, TypeError, IndexError, ValueError):
                 print(ui.colorize(f"  ⚠ could not write {key}={val!r} — set it later with "
                                   f"`rh env set {key}=...`", ui.YELLOW))
         config.save_env(root, env)
@@ -160,7 +171,7 @@ def cmd_init(args, root: Path):
         (d / ".gitkeep").write_text("")
     if getattr(args, "json", False):
         ui.json_out({"root": str(root), "rh_dir": str(d), "initialized": True,
-                     "backups": backups, "slug": slug, "answers": answers, "skipped": skipped})
+                     "backups": backups, "name": name, "answers": answers, "skipped": skipped})
         return 0
     print(ui.banner("rh init", f"{root}"))
     print(f"  {ui.colorize('✓', ui.GREEN)} created {d}/")
@@ -169,7 +180,7 @@ def cmd_init(args, root: Path):
     print(f"  {ui.colorize('✓', ui.GREEN)} src/ results/ papers/ at root")
     if not had_env or args.clean:
         print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
-    elif slug or answers:
+    elif name or answers:
         print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md updated at {env_file}")
     else:
         print(f"  {ui.colorize('↷', ui.DIM)} ENV.md kept as-is at {env_file}")
@@ -183,7 +194,7 @@ def cmd_init(args, root: Path):
     if skipped:
         print(ui.colorize(f"  skipped (Orchestrator will ask): {', '.join(skipped)}", ui.DIM))
     print()
-    print(f"Next: {ui.colorize('rh env set project.slug=<name>', ui.CYAN)}  "
+    print(f"Next: {ui.colorize('rh env set project.name=<name>', ui.CYAN)}  "
           f"·  {ui.colorize('rh env show', ui.CYAN)}  ·  {ui.colorize('rh doctor', ui.CYAN)}")
     return 0
 
@@ -228,8 +239,8 @@ def _init_questionnaire(args, root: Path) -> tuple[dict[str, str], list[str]]:
         else:
             answers[key] = raw
 
-    ask("slug", "Project slug (kebab-case, e.g. my-project)",
-        args.slug or str((env.get("project") or {}).get("slug") or "demo"))
+    ask("project.name", "Project name (only a label — the directory is the workspace)",
+        str((env.get("project") or {}).get("name") or root.name))
     ask("agents.count", "How many parallel agents for planning and research? (1..4)",
         str(agents.get("count") or 1), "1 | 2 | 3 | 4")
     ask("agents.backend", "Backend for parallel agents?",
@@ -356,6 +367,10 @@ def cmd_env_set(args, root: Path):
             continue
         key, raw = pair.split("=", 1)
         key = key.strip()
+        current = config.resolve_key(key)
+        if current != key:
+            print(ui.colorize(f"↷ {key} was renamed — writing {current}", ui.DIM))
+            key = current
         spec = config.schema_for(key)
         if spec is None:
             print(f"⚠ unknown key {key!r} — see `rh env list`", file=sys.stderr)
@@ -534,7 +549,7 @@ def cmd_status(args, root: Path):
     if getattr(args, "json", False):
         ui.json_out({
             "root": str(root),
-            "slug": env.get("project", {}).get("slug", ""),
+            "name": env.get("project", {}).get("name", ""),
             "phase": summary["current_phase"],
             "phase_name": tasks_mod.phase_name(summary["current_phase"]),
             "summary": summary,
@@ -542,9 +557,9 @@ def cmd_status(args, root: Path):
             "initialized": (root / ".rh").exists(),
         })
         return 0
-    slug = env.get("project", {}).get("slug") or "untitled"
-    print(ui.banner(f"{slug} — status", str(root)))
-    print(f"Project: {slug} · Phase: {tasks_mod.phase_name(summary['current_phase'])}")
+    name = env.get("project", {}).get("name") or "untitled"
+    print(ui.banner(f"{name} — status", str(root)))
+    print(f"Project: {name} · Phase: {tasks_mod.phase_name(summary['current_phase'])}")
     print()
     if gate["problems"]:
         for p in gate["problems"]:
@@ -869,7 +884,7 @@ def cmd_resume(args, root: Path):
     if not dry:  # --dry-run writes nothing, not even the prompt file
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(prompt + "\n", encoding="utf-8")
-    slug = env.get("project", {}).get("slug") or "untitled"
+    name = env.get("project", {}).get("name") or "untitled"
 
     # The launch command (model + thinking level included) is written in ENV.md's
     # agents.commands.orchestrator. Only when no command template exists at all do
@@ -914,7 +929,7 @@ def cmd_resume(args, root: Path):
              else plan["model"]) or "ENV.md default"
     if plan["thinking"]:
         model += f" · thinking {plan['thinking']}"
-    print(ui.banner(f"rh resume — {slug}", f"project: {root} · this terminal"))
+    print(ui.banner(f"rh resume — {name}", f"project: {root} · this terminal"))
     print(f"{ui.colorize('model:', ui.DIM)} {model}"
           f"  {ui.colorize('skills:', ui.DIM)} {', '.join(plan['skills']) or '—'}")
     print(f"{ui.colorize('command:', ui.DIM)} {shlex.join(plan['argv'])}")
@@ -1027,11 +1042,10 @@ def cmd_agents(args, root: Path):
 @with_root
 def cmd_spawn_terminal(args, root: Path):
     """`rh spawn terminal <command>` — open a plain shell terminal in a new pane."""
-    if not paths.rh_dir(root).exists():
-        # Still allow --dry-run outside a project for shell/split detection demo
-        if not getattr(args, "dry_run", False):
-            print(ui.colorize(f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED), file=sys.stderr)
-            return 1
+    # Still allow --dry-run outside a project for shell/split detection demo
+    if not paths.rh_dir(root).exists() and not getattr(args, "dry_run", False):
+        print(ui.colorize(f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED), file=sys.stderr)
+        return 1
     env = config.load_env(root) if paths.rh_dir(root).exists() else config.deep_merge(config.DEFAULT_ENV, {})
     command = " ".join(getattr(args, "text", None) or []).strip()
     if not command:
@@ -1076,8 +1090,8 @@ def cmd_agent_status(args, root: Path):
         for line in f.read_text(encoding="utf-8").splitlines():
             try:
                 rows.append(json.loads(line))
-            except Exception:
-                continue
+            except json.JSONDecodeError:
+                continue  # a torn line at the tail of an append-only file
     if getattr(args, "json", False):
         ui.json_out(rows)
         return 0
@@ -1202,7 +1216,7 @@ def cmd_spawn(args, root: Path):
             print(ui.colorize(f"✗ cannot read {args.prompt_file}: {exc}", ui.RED), file=sys.stderr)
             return 1
         extra = f"{extra}\n{text}".strip() if extra else text
-    slug = env.get("project", {}).get("slug") or "untitled"
+    name = env.get("project", {}).get("name") or "untitled"
     store = tasks_mod.TaskStore(root)
     prompt = spawn_mod.build_role_prompt(root, env, role, store, extra=extra)
     prompt_file = paths.rh_dir(root) / "tmp" / f"spawn-{add_mod.slugify(role)}-prompt.md"
@@ -1240,7 +1254,7 @@ def cmd_spawn(args, root: Path):
              else plan["model"]) or "ENV.md default"
     if plan["thinking"]:
         model += f" · thinking {plan['thinking']}"
-    print(ui.banner(f"rh spawn — {role}", f"project: {root} · {slug}"))
+    print(ui.banner(f"rh spawn — {role}", f"project: {root} · {name}"))
     print(f"{ui.colorize('model:', ui.DIM)} {model}"
           f"  {ui.colorize('skills:', ui.DIM)} {', '.join(plan['skills']) or '—'}"
           f"  {ui.colorize('agents.count:', ui.DIM)} {(env.get('agents') or {}).get('count')}")
@@ -1352,7 +1366,9 @@ def cmd_skill_install(args):
         ui.json_out({"installed": str(dest), "files": files})
         return 0
     print(ui.colorize(f"✓ installed skill to {dest}", ui.GREEN))
-    print(ui.colorize("  pi and other Agent Skills clients discover ~/.agents/skills/", ui.DIM))
+    default_dest = Path.home() / ".agents" / "skills" / "research-helper"
+    if dest != default_dest:
+        print(ui.colorize(f"  note: pi discovers skills under {default_dest.parent}/", ui.DIM))
     return 0
 
 
@@ -1367,7 +1383,6 @@ def build_parser():
 
     s = sub.add_parser("init", help="create .rh/ layout (non-destructive; --force/--clean archive first, --dry-run previews)",
                        parents=[common])
-    s.add_argument("--slug", default=None)
     s.add_argument("--clean", action="store_true",
                    help="archive .rh/ (event logs, notes, ENV.md, tasks.json) to .rh/.bak/<timestamp>/ then recreate it")
     s.add_argument("--force", action="store_true",
@@ -1508,7 +1523,9 @@ def build_parser():
     s = sub.add_parser("skill", help="install the bundled agent skill", parents=[common])
     ssub = s.add_subparsers(dest="sk", required=True)
     si = ssub.add_parser("install", parents=[common])
-    si.add_argument("--dest", default=None, help="destination dir (default: ~/.agents/skills/research-helper)")
+    si.add_argument("--dest", default=None,
+                    help="the skill directory itself, e.g. ~/.agents/skills/my-name "
+                         "(default: ~/.agents/skills/research-helper)")
     si.add_argument("--force", action="store_true", help="overwrite an existing skill dir")
     si.set_defaults(func=cmd_skill_install)
 

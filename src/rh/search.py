@@ -78,7 +78,7 @@ def search_rg(root: Path, query: str, *, smart_case: bool = True, max_hits: int 
         cmd.append("--ignore-case")
     cmd += ["-e", query, "--", *[str(f) for f in files]]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
     hits: list[Hit] = []

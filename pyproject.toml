@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rh-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "rh — orchestrate an AI research project end to end from the terminal"
 readme = "README.md"
 requires-python = ">=3.9"

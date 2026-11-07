@@ -15,7 +15,7 @@ Placeholders understood in a command template:
                     system-prompt area (e.g. `--system-prompt-file {agent_file}`)
   {agent_file_contents}  contents of `.rh/agents/<role>.md` inline (for harnesses
                     that take the text, not a path)
-  {root} {slug}     project root, project slug
+  {root} {name}     project root, project name (from .rh/ENV.md)
   {provider} {model} {thinking}   from `agents.roles.<role>`
   {skills}          comma-joined `agents.skills`
   {skills:list}     ONE token per skill, no flag attached (bare token only; for
@@ -53,7 +53,7 @@ from .tasks import TaskStore, phase_name
 _PLACEHOLDER = re.compile(r"(?<!\$)\{(\w+)\}")
 
 PLACEHOLDERS = ("role", "agent", "prompt", "prompt_file", "agent_file",
-                "agent_file_contents", "root", "slug", "provider", "model", "thinking", "skills")
+                "agent_file_contents", "root", "name", "provider", "model", "thinking", "skills")
 SPAWN_PLACEHOLDERS = PLACEHOLDERS + ("command",)
 
 
@@ -144,7 +144,7 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
         "agent_file": agent_file_path,
         "agent_file_contents": agent_file_contents,
         "root": str(root),
-        "slug": str((env.get("project") or {}).get("slug") or ""),
+        "name": str((env.get("project") or {}).get("name") or ""),
         "provider": spec["provider"],
         "model": spec["model"],
         "thinking": spec["thinking"],
@@ -303,7 +303,7 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
         notes: list[str] = []
         values = {
             "role": role, "agent": role, "root": str(root),
-            "slug": str((env.get("project") or {}).get("slug") or ""),
+            "name": str((env.get("project") or {}).get("name") or ""),
             "prompt_file": plan.get("prompt_file", ""),
             "provider": plan.get("provider", ""),
             "model": plan.get("model", ""),
@@ -386,8 +386,8 @@ def running_count(root: Path) -> int:
     for line in f.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
-        except Exception:
-            continue
+        except json.JSONDecodeError:
+            continue  # a torn line at the tail of an append-only file
         if rec.get("closed"):
             continue
         pid = rec.get("pid")
@@ -447,7 +447,7 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
         agent_path = f".rh/agents/{role}.md"
     spec = role_spec(env, role)
     skills = skills_for(env)
-    slug = (env.get("project") or {}).get("slug") or "untitled"
+    project_name = (env.get("project") or {}).get("name") or "untitled"
     current = store.current_phase()
     gate = config.phase_gate(root, env)
     model_line = (f"{spec['provider']}/{spec['model']}"
@@ -455,7 +455,7 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
     if spec["thinking"]:
         model_line += f" (thinking: {spec['thinking']})"
     lines = [
-        f"You are the {role.upper()} agent for the research project '{slug}'.",
+        f"You are the {role.upper()} agent for the research project '{project_name}'.",
         f"Project root (verify you are here before writing anything): {root}",
         f"Session model: {model_line}",
         f"Role file: {agent_path} — your tailored job description; follow it.",

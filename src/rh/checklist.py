@@ -57,6 +57,13 @@ def _phase_items(root: Path, env: dict | None = None) -> list[dict]:
     return items
 
 
+def _due(ok: bool, needed_at: int, current: int) -> str:
+    """`ok`, or `later` when the item belongs to a phase not reached yet."""
+    if ok:
+        return "ok"
+    return "later" if needed_at > current else "pending"
+
+
 def build_checklist(root: Path, env: dict | None = None) -> dict:
     """Live checklist for the project at `root`.
 
@@ -144,7 +151,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     items.append({
         "id": "plan-approved",
         "label": "PLAN.md approved by the user (gates.user_approves_plan) before any implementation",
-        "status": "ok" if plan_ok else "pending",
+        "status": _due(plan_ok, 4, current),
         "ref": RULE_REFS["plan_approval"],
         "detail": "" if plan_ok else "PLAN.md missing or gate unmet — no implementation before the user's yes",
     })
@@ -154,7 +161,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     items.append({
         "id": "critique-veto",
         "label": "Zero open blocking questions from Critique (gates.critique_veto) before phase 8",
-        "status": "ok" if crit_ok else ("pending" if gates_veto else "ok"),
+        "status": _due(crit_ok, 7, current) if gates_veto else "ok",
         "ref": RULE_REFS["critique_veto"],
         "detail": "" if (crit_ok or not gates_veto) else "blocking questions still open — return to phase 6 (or 4 if scope changes)",
     })
@@ -186,7 +193,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     items.append({
         "id": "content-status-header",
         "label": "STATUS.md has the `phase: | step: | updated:` header (what agents read for state)",
-        "status": "pending" if header_missing else "ok",
+        "status": _due(not header_missing, 5, current),
         "ref": "§5 STATUS.md",
         "detail": (f"header missing: {', '.join(header_missing)} — write `phase: <n NAME> | step: <id> | updated: <ISO>` "
                    "(markdown emphasis is fine)") if header_missing else "",
@@ -198,7 +205,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         items.append({
             "id": "content-plan-verify",
             "label": f"Every PLAN.md step ({len(plan_steps)} found) names a verify command",
-            "status": "ok" if verify_ok else "pending",
+            "status": _due(verify_ok, 4, current),
             "ref": "§4 PLAN.md",
             "detail": "" if verify_ok else "PLAN.md has steps but no `verify:` line — a step without a check is not a step",
         })
@@ -206,7 +213,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         items.append({
             "id": "content-plan-verify",
             "label": "PLAN.md steps each name a verify command",
-            "status": "pending",
+            "status": _due(False, 4, current),
             "ref": "§4 PLAN.md",
             "detail": "PLAN.md missing or has no `### S<N>` steps yet — plan gate (phase 4) not met",
         })
@@ -216,7 +223,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         items.append({
             "id": "content-lit-doi",
             "label": "Every LITERATURE.md entry carries a DOI (findings without a DOI cannot be cited)",
-            "status": "ok" if doi_ok else "pending",
+            "status": _due(doi_ok, 3, current),
             "ref": "§3 LITERATURE.md",
             "detail": "" if doi_ok else "LITERATURE.md has entries but no DOI line — add `DOI: 10.xxxx/...` per entry",
         })
@@ -224,7 +231,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         items.append({
             "id": "content-lit-doi",
             "label": "LITERATURE.md entries carry DOIs",
-            "status": "pending",
+            "status": _due(False, 3, current),
             "ref": "§3 LITERATURE.md",
             "detail": "LITERATURE.md missing or empty — phase 3 not met",
         })
@@ -235,7 +242,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         items.append({
             "id": "content-one-layout",
             "label": "OUTPUT_LAYOUT.md has exactly one `## Our layout`",
-            "status": "ok" if one_layout else "pending",
+            "status": _due(one_layout, 3, current),
             "ref": "§3 OUTPUT_LAYOUT.md",
             "detail": "" if one_layout else f"found {len(layouts)} `## Our layout` headings (want exactly 1) — two layouts in the file is a defect",
         })
@@ -243,7 +250,7 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         items.append({
             "id": "content-one-layout",
             "label": "OUTPUT_LAYOUT.md has exactly one layout",
-            "status": "pending",
+            "status": _due(False, 3, current),
             "ref": "§3 OUTPUT_LAYOUT.md",
             "detail": "OUTPUT_LAYOUT.md missing or empty (may be skipped if the output is not a manuscript/report)",
         })

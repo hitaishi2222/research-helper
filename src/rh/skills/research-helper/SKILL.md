@@ -1,6 +1,6 @@
 ---
 name: research-helper
-description: Orchestrate a research project end to end: intake, environment, literature survey, planning, implementation with review, critique gate, manuscript, close. Driven by `.rh/env.json` (agent count, per-role models, launch commands, literature tools, gates) and the environment record (`.rh/ENVIRONMENT.md`, or `project.environment` in the config). Use when the user wants to scope a research question, survey literature, build and test an experiment, or write it up.
+description: "Orchestrate a research project end to end: intake, environment, literature survey, planning, implementation with review, critique gate, manuscript, close. Driven by `.rh/env.json` (agent count, per-role models, launch commands, literature tools, gates) and the environment record (`.rh/ENVIRONMENT.md`, or `project.environment` in the config). Use when the user wants to scope a research question, survey literature, build and test an experiment, or write it up."
 ---
 
 # Research helper

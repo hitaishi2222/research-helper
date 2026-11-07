@@ -183,9 +183,9 @@ PLAN_STEP = re.compile(r"^###\s+((?:S\d+[a-zA-Z]?|T-\S+))\s*[—–-]\s*(.+)$", 
 
 # Exit gate text per phase (SKILL.md §3) — shown by `rh phase`, never enforced alone.
 PHASE_EXIT = {
-    0: "ENV.md config block parses and the user confirmed it",
+    0: ".rh/env.json parses and the user confirmed it",
     1: "PROBLEM.md has all six sections, user approved",
-    2: "ENV.md `## Environment` notes the tools/versions the user named",
+    2: ".rh/ENVIRONMENT.md notes the tools/versions the user named",
     3: "LITERATURE.md (+ OUTPUT_LAYOUT.md when the output is a paper/report), or a user-agreed skip",
     4: "PLAN.md: both planners agreed + the user approved it",
     5: "STATUS.md describes reality (phase, step, blockers, history)",

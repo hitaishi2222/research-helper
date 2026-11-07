@@ -17,9 +17,9 @@ FLIP = {0: "CONFIG", 1: "INTAKE", 2: "ENVIRONMENT", 3: "LITERATURE", 4: "PLAN",
 
 MERMAID_TEMPLATE = """%%{init: {'theme': 'dark', 'background': 'transparent'}}%%
 flowchart LR
-    C["0 CONFIG<br/>ENV.md"]:::done
+    C["0 CONFIG<br/>env.json"]:::done
     I["1 INTAKE<br/>PROBLEM.md"]:::done
-    E["2 ENVIRONMENT<br/>ENV.md tools"]:::done
+    E["2 ENVIRONMENT<br/>ENVIRONMENT.md"]:::done
     L["3 LITERATURE<br/>papers/ GAPS.md"]:::done
     P["4 PLAN<br/>PLAN.md"]:::done
     S["5 STATE<br/>STATUS.md"]:::done

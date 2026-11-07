@@ -1,6 +1,6 @@
 ---
 name: research-helper
-description: Orchestrate a research project end to end — intake, environment setup, literature survey, dual-model planning, implementation with adversarial review, critique gate, manuscript, close — driven by `.rh/ENV.md` in the project that holds the config block (agent count, per-role models, literature tooling, approval gates) and the environment notes. Use when the user wants to scope a research question, survey literature, build and test an experiment, or write it up.
+description: Orchestrate a research project end to end — intake, environment setup, literature survey, dual-model planning, implementation with adversarial review, critique gate, manuscript, close — driven by `.rh/env.json` (agent count, per-role models, launch commands, literature tooling, approval gates) and `.rh/ENVIRONMENT.md` (the environment notes). Use when the user wants to scope a research question, survey literature, build and test an experiment, or write it up.
 ---
 
 # Research Helper
@@ -18,8 +18,8 @@ Nothing here is advisory. If a rule cannot be followed, stop and ask.
 1. **The current runner is always the Orchestrator.** Whoever loaded this skill is the head.
    It is the default: do not hand the role to a spawned agent. It alone asks the user
    questions, merges the plan, and updates `STATUS.md`.
-2. **Never choose a model.** Agent count and every role's model live in the config block at
-   the top of `.rh/ENV.md`. To change them, the user asks the Orchestrator to edit that block.
+2. **Never choose a model.** Agent count and every role's model live in
+   `.rh/env.json`. To change them, the user asks the Orchestrator to run `rh env set`.
 3. **Ask before every state-changing action.** See §6.
 4. **No empty placeholder files.** Every artifact is created when it first has content.
 5. **No silent scope change.** Anything not in an approved `PLAN.md` needs approval first.
@@ -30,13 +30,13 @@ Nothing here is advisory. If a rule cannot be followed, stop and ask.
    blocking questions. Claims without evidence are rework.
 9. **`STATUS.md` is truth — and it is the Orchestrator's own work.** Update it after every
    step and before every question to the user. Never delegate that update to a spawned agent.
-10. **Re-read the `ENV.md` config block at the start of every phase.** Never cache it. The
-    environment notes below it are re-read too — a version recorded in phase 2 may have moved.
+10. **Re-read `.rh/env.json` and `.rh/ENVIRONMENT.md` at the start of every phase.** Never
+    cache them — a version recorded in phase 2 may have moved.
 11. **The user may waive a rule.** A waiver is not silent: name it in `STATUS.md` history with
     the rule number and in the manuscript's limitations. Without one, an unmet rule stops
     the phase.
 12. **Verify the project path before opening any agent.** Resolve the root, confirm `.rh/`
-    and `.rh/ENV.md` are there, and state the path to the user before spawning. Never open
+    and `.rh/env.json` are there, and state the path to the user before spawning. Never open
     an agent in `$HOME`, a parent directory, or a neighbouring project.
 13. **Close what you opened.** When a spawned agent's job is done, close its pane, window or
     tab and record the close in `STATUS.md`. Agents left running burn the user's credits.
@@ -56,9 +56,11 @@ Inside the project root:
 
 ```
 <project root>/
-  .rh/ENV.md        config block (phase 0) + environment notes      Orchestrator  phase 0/2
+  .rh/env.json      the config (phase 0) — written by `rh env set`   Orchestrator  phase 0
+  .rh/ENVIRONMENT.md  tools + versions the user named               Orchestrator  phase 2
+  .rh/CHECKLIST.md  generated to-do list (setup + gates + rules)    Orchestrator  phase 0+
   PROBLEM.md        goal, scope, success criteria, falsifier        Orchestrator  phase 1
-  PLAN.md           approved step list (links ENV.md for tooling)   Planners      phase 4
+  PLAN.md           approved step list (links .rh/env.json)         Planners      phase 4
   STATUS.md         current state, roster, blockers, open questions Orchestrator  phase 5+
   LITERATURE.md     what we took from each paper, with citations     Literature    phase 3
   OUTPUT_LAYOUT.md  output skeleton the user asked for + the patterns  Lit/Researcher phase 3+
@@ -68,10 +70,11 @@ Inside the project root:
   papers/           downloaded PDFs, named <firstauthor><year>_<slug>.pdf
                     keep them: never delete or move a downloaded paper
   .rh/logs/         event logs, see §7
-  .rh/agents/<role>.md  per-role tailored job description; NO role info is hardcoded
-                       in rh — this file is the role. Created by scaffold
-                       (`rh agents <role> --write`), edited with the user. Wire it
-                       into the CLI's system-prompt area in agents.commands.<role>
+  .rh/agents/<role>.md  per-role tailored job description; `rh init` scaffolds all
+                       starter roles (orchestrator, literature, researcher,
+                       reviewer, critique, writer). This file IS the role — edit it
+                       with the user. Wire it into the CLI's system-prompt area in
+                       agents.commands.<role>.
   src/              implementation
   results/          every produced number, table, figure + the script that made it
 ```
@@ -86,20 +89,25 @@ Before writing any artifact, run `rh info <FILE.md>`: it prints that file's purp
 phase, the sections it must have, the template to follow and the rules that bite there — so
 no agent has to guess (and a user can read the same description).
 
-The `rh` CLI (§10) keeps a machine-readable mirror of this state under `.rh/`
-(`ENV.md`, `env.json`, `tasks.json`, `logs/`, `notes/`, `workflow.mmd`) — the
-artifacts above remain the truth; `.rh/` is derived display state, with the two
-exceptions that `rh env set` writes `.rh/ENV.md` itself and `rh` never deletes
-downloaded `papers/`.
+The `rh` CLI (§10) keeps its machine state under `.rh/`
+(`env.json`, `ENVIRONMENT.md`, `CHECKLIST.md`, `tasks.json`, `agents/`, `logs/`,
+`notes/`, `workflow.mmd`) — the artifacts above remain the truth; `.rh/` is
+derived display state, with two exceptions: `rh env set` writes `.rh/env.json`
+itself, and `rh` never deletes downloaded `papers/`.
 
 ---
 
-## 2. `.rh/ENV.md` — config block
+## 2. `.rh/env.json` — the config (write it through `rh env`)
 
-Location: `<project root>/.rh/ENV.md`. The `jsonc` block at its top is the only config in this
-system; there is no separate config file and nothing config-like lives in the skill
-directory. If the block is absent or unparseable, run phase 0. Never hand-edit it silently;
-propose a diff, get approval, then write. Phase 2 appends the environment notes below the block.
+Location: `<project root>/.rh/env.json`. It is the only config in this system, and `rh env set
+KEY=VALUE` is the interface — it writes the file and `rh env show` reads it back. Do not
+hand-edit the JSON silently: propose a diff, get approval, then run `rh env set` (or edit the
+file and say so). The environment notes are a separate artifact, `.rh/ENVIRONMENT.md` (§3
+phase 2); config and prose never share a file. If the file is absent or unparseable, run
+phase 0.
+
+The JSON below is the schema `rh env set` fills in (`jsonc` comments are for this document
+only — the file itself is plain JSON).
 
 Ask the user each key (batch only unrelated ones). Offer only what the user actually names
 or confirms — never invent model or tool names, and never infer them from what happens to be
@@ -127,11 +135,17 @@ installed on the machine. A binary on PATH does not mean this project should use
       // the placeholders below; every {model} {thinking} {skills} {prompt}
       // {prompt_file} {agent_file} {root} {name} {role} must be written by the user/you.
       // {agent_file} is .rh/agents/<role>.md — put it in the harness's
-      // system-prompt flag for that CLI (e.g. pi: --system-prompt-file {agent_file};
+      // system-prompt-APPEND flag (pi: --append-system-prompt {agent_file};
       // claude: --append-system-prompt-file {agent_file}; others: --system-file /
-      // reading AGENTS.md). rh never hardcodes the flag name.
-      "orchestrator": "pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}",
-      "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}",
+      // reading AGENTS.md). Never a flag that REPLACES the system prompt — the
+      // session then loses its own harness rules. rh never hardcodes the flag name.
+      // The prompt goes positionally ({prompt}); {prompt_file} only for a CLI that
+      // really has such a flag. pi has none: --prompt-template registers a /command
+      // and sends no message, so it cannot carry the launch prompt.
+      // The orchestrator gets NO skill restriction: it must see every skill to
+      // decide which one each spawned agent is given.
+      "orchestrator": "pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}",
+      "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --append-system-prompt {agent_file} {prompt}",
       "default": "", //  used for any role without its own command
     },
     "spawn": "tmux new-window -n rh-{agent} -c {root} {command}", // how `rh spawn`
@@ -163,15 +177,15 @@ installed on the machine. A binary on PATH does not mean this project should use
 }
 ```
 
-Interview order (batch 2–3 unrelated keys per question; show the resulting block before
+Interview order (batch 2–3 unrelated keys per question; show the resulting values before
 moving on): project root → name → **how many parallel agents the user wants for planning and
 research (1..4)** → backend → agent CLI → **the exact launch command for that CLI** (model,
 thinking level, how a skill is selected; write `{model}` `{thinking}` `{skills}` `{prompt}`
 wherever the flag goes) → the command that opens a pane (`agents.spawn`) → skills to read →
 per-role models (+ thinking level) → planner models → search/browse tool → reference manager →
 reading method → paywall policy → git → confirm gates. The root is never stored: it is the
-directory `.rh/ENV.md` sits in, and `.rh/` is what needs verifying before any agent is opened
-(rule 12).
+directory `.rh/env.json` sits in, and `.rh/` is what needs verifying before any agent is
+opened (rule 12).
 
 ---
 
@@ -186,20 +200,27 @@ directory `.rh/ENV.md` sits in, and `.rh/` is what needs verifying before any ag
 
 Every phase states its **exit gate**. Do not enter the next phase with an unmet gate.
 
-### Phase 0 — CONFIG → `.rh/ENV.md` config block
+### Phase 0 — CONFIG → `.rh/env.json` (+ `.rh/agents/`, `.rh/CHECKLIST.md`)
 
-`rh init` walks a short questionnaire (name, agent count, backend, CLI, shell,
-split, skills). Defaults are the values already in ENV.md, so Enter keeps a
-configured project as it is; `s` really skips (`s` is never written as a value) —
-a skipped question is yours to ask later. It never overwrites existing files
-without archiving them first (`.rh/.bak/`): `--force` archives a copy,
-`--clean` archives the whole `.rh/` (event logs, notes) before recreating it,
-`--dry-run` writes nothing at all. If `PLAN.md` already exists in the project,
-adopt it — read it, then `rh plan import` — never overwrite it.
+`rh init` writes the workspace in one pass: `.rh/env.json` (the config), six
+`.rh/agents/<role>.md` role scaffolds, and `.rh/CHECKLIST.md` — **your to-do
+list for the rest of the session** (missing environment values to ask about,
+launch commands to wire, role files to tailor, `.rh/workflow.mmd` after the
+plan). It also walks a short rich questionnaire (name, agent count, backend, CLI,
+shell, split, harness start template): the keys are shown once, then one
+compact question frame lists the installed options. It does not ask which skills
+to load — that is your call (`rh env set agents.skills=...`). Defaults are the values already in env.json, so Enter
+keeps a configured project as it is; Tab submits and moves on; `s` really skips
+(`s` is never written as a value) — a skipped question is yours to ask later;
+`q` finishes with the answers so far. It never
+overwrites existing files without archiving them first (`.rh/.bak/`): `--force`
+archives a copy, `--clean` archives the whole `.rh/` (event logs, notes) before
+recreating it, `--dry-run` writes nothing at all. If `PLAN.md` already exists in
+the project, adopt it — read it, then `rh plan import` — never overwrite it.
 
-Ask for the project root, then load `<root>/.rh/ENV.md`; if absent or its config block does
-not parse, interview and write the block. Print it and get a yes. Exit gate: the block
-parses, the user confirmed, and the file sits in `.rh/` of the root the user named.
+Ask for the project root, then load `<root>/.rh/env.json`; if absent or it does not parse,
+interview the user and write it with `rh env set`. Show the values and get a yes. Exit gate:
+the file parses, the user confirmed it, and it sits in `.rh/` of the root the user named.
 
 ### Phase 1 — INTAKE → `PROBLEM.md`
 
@@ -208,19 +229,20 @@ as success; what would **falsify** the result; constraints (time, hardware, data
 explicitly out of scope. Exit gate: `PROBLEM.md` has all six sections and the user has read
 it back to the Orchestrator in their own words or approved it.
 
-### Phase 2 — ENVIRONMENT → `.rh/ENV.md` environment notes, under the config block
+### Phase 2 — ENVIRONMENT → `.rh/ENVIRONMENT.md`
 
 Interview the user; do not probe. Ask which runtimes, packages, simulators, solvers, GPU
 stack and CLI tools this project will actually use, and which versions they expect. Record
-what the user names in an `## Environment` section below the config block — including tools
-the CLI has never heard of. Never run `command -v` to decide the environment: a binary being
-installed says nothing about whether this project should use it.
+what the user names in `.rh/ENVIRONMENT.md` (`## Environment`, one line per tool) — including
+tools the CLI has never heard of. Config stays in `.rh/env.json`; this file is prose.
+Never run `command -v` to decide the environment: a binary being installed says nothing about
+whether this project should use it.
 
-This section is the source for the manuscript's methods section — never re-type versions
+This file is the source for the manuscript's methods section — never re-type versions
 later, and amend it later only with a dated note.
 
 Exit gate: the user has named the tools and versions for every part of the phase-1 scope,
-and the `## Environment` section records them. Unknown or user-named tools are valid.
+and `.rh/ENVIRONMENT.md` records them. Unknown or user-named tools are valid.
 
 ### Phase 3 — LITERATURE → `papers/`, `LITERATURE.md`, `OUTPUT_LAYOUT.md`, `GAPS.md`
 
@@ -281,7 +303,7 @@ alone, and hand the user to a fresh session for the plan gate (rule 14).
 
 The merged `PLAN.md` is ordered steps, each with: id, action, owner role, deliverable file,
 **verification command or check**, dependencies on other steps, and estimated risk. Plus the
-tooling table from `ENV.md` (link it, never copy it). Steps that are pure research (unknown
+tooling table from `.rh/env.json` (link it, never copy it). Steps that are pure research (unknown
 feasibility) are marked `spike` and carry a `timebox`.
 
 Exit gate: both planners state agreement in `PLAN.md` ("agreed by <model> / <model> on
@@ -329,7 +351,7 @@ refuse this gate; its refusal names the specific questions.
 
 ### Phase 8 — MANUSCRIPT → `MANUSCRIPT.md`
 
-Writer drafts from artifacts only: methods cite the `ENV.md` versions, every claim traces to
+Writer drafts from artifacts only: methods cite the `.rh/ENVIRONMENT.md` versions, every claim traces to
 a `results/` file or a `LITERATURE.md` entry, every borrowed implementation is attributed
 via `GAPS.md`. Setup comes from the single layout in `OUTPUT_LAYOUT.md`: open `MANUSCRIPT.md`
 with those headings in that order, carrying the listed topics, equations and figures. If the
@@ -390,9 +412,9 @@ When a hat's work would be reviewed by the same context that did the work, say s
 There is **no hardcoded role info** in rh. Each role is entirely its file
 `.rh/agents/<role>.md` (see `rh agents`). The file carries the role's rules
 and scope so harnesses that read AGENTS.md-style role files can be tailored
-to the role. Scaffold it with `rh agents <role> --write` (or all starter
-roles with `rh agents --write`), edit it with the user's approval, and the
-Orchestrator records the launch command for each role in `.rh/ENV.md`
+to the role. `rh init` scaffolds all starter roles already; use
+`rh agents <role> --write` for a later role, edit it with the user's approval, and the
+Orchestrator records the launch command for each role in `.rh/env.json`
 (`agents.commands.<role>`). `rh spawn <role>` then uses exactly that command
 to open the agent, wiring the role file into the harness's system-prompt
 area with `{agent_file}` (or, for `rh spawn terminal <cmd>`, a plain shell
@@ -400,18 +422,18 @@ terminal in the user's shell and the pane layout in `agents.split`).
 
 Spawn agents with `rh spawn <role> "<instructions>"` (or `--prompt-file`). The launch
 command, its model, its thinking level and its skill selection all come from
-`agents.commands.<role>` in `.rh/ENV.md`; `rh spawn` puts the role file at
+`agents.commands.<role>` in `.rh/env.json`; `rh spawn` puts the role file at
 `{agent_file}` (the template wires it into the CLI's system-prompt area),
 appends the session facts (model, skills, board tasks, current phase) to the
 prompt, and opens it with `agents.spawn`. For a plain terminal
 inside the same backend (not an agent), use `rh spawn terminal <cmd>` — it runs
 in `agents.shell` (or `$SHELL`) and respects `agents.split`, asking the user for
 the layout when it is not set. Preview first with `rh spawn <role> … --dry-run`; if `rh` warns that
-`{model}`, `{thinking}` or `{skills}` is missing from the template, fix the ENV.md command
+`{model}`, `{thinking}` or `{skills}` is missing from the template, fix the command in `.rh/env.json`
 with the user instead of accepting the harness default.
-Before spawning, resolve and print the project path and check `.rh/ENV.md` is there (rule 12);
+Before spawning, resolve and print the project path and check `.rh/env.json` is there (rule 12);
 record each spawn in `STATUS.md`. Confirm count and models with the user before spawning if
-anything differs from the `.rh/ENV.md` config block. When the job is done, close the agent's
+anything differs from `.rh/env.json`. When the job is done, close the agent's
 pane/window/tab and record the close with the same care (rule 13). `rh resume` always runs the
 Orchestrator in the terminal the user called it from — spawning panes is the Orchestrator's
 own work, not the resume command's. `examples/` in the `rh` repo carries starter scripts and
@@ -422,7 +444,7 @@ per-role prompt templates with `{{PLACEHOLDER}}`s to copy.
 ## 6. Ask-before list
 
 Free without asking: reading, searching, writing the skill's own artifacts, running tests,
-downloading open-access papers, spawning agents up to `agents.count` with the `ENV.md` models.
+downloading open-access papers, spawning agents up to `agents.count` with the `.rh/env.json` models.
 
 Ask first, every time: installing system packages or new dependencies, deleting or
 overwriting any file the skill did not create, exceeding `agents.count` or changing a model,
@@ -455,8 +477,9 @@ change, a user override. Routine success is not logged; the artifacts already sh
 
 ## 8. Templates
 
-`.rh/ENV.md` — the config block from §2 on top, then the environment notes the Orchestrator
-writes after asking (free-form; any tool the user names is valid):
+`.rh/env.json` — the config object from §2 (written with `rh env set`, never hand-edited
+silently). `.rh/ENVIRONMENT.md` — the notes the Orchestrator writes after asking
+(free-form; any tool the user names is valid):
 
 ```
 ## Environment
@@ -544,8 +567,9 @@ lives in `.rh/` at the project root:
 
 ```
 .rh/
-  ENV.md          the config block + environment notes (§2) — not at the project root
-  env.json        machine mirror of the same block (written by rh env set)
+  env.json        the config (§2) — written by rh env set, read by rh env show
+  ENVIRONMENT.md  tools + versions the user named (phase 2) — prose, not config
+  CHECKLIST.md    your generated to-do list (setup + gates + rules)
   tasks.json      task board: phases + steps + subtasks, states idle|working|complete
   logs/ notes/ tmp/
   workflow.mmd    the project workflow diagram — AUTHORED by the Orchestrator
@@ -556,20 +580,19 @@ Commands agents use per phase:
 
 | Command | Phase | Notes |
 |---|---|---|
-| `rh init [--force] [--dry-run] [--non-interactive]` | 0 | creates the `.rh/` layout in this directory, non-destructively (never overwrites without `--force` backup); project name = the directory, changeable with `rh env set project.name=`; skippable questionnaire per §2 |
-| `rh env show` / `env list` | 0–2 | read and validate the config block + environment notes |
-| `rh env set KEY=VALUE ...` | 0 | writes `.rh/ENV.md`'s block **and** the `.rh/env.json` mirror; preserves the notes below it |
+| `rh init [--force] [--dry-run] [--non-interactive]` | 0 | creates the `.rh/` layout, `env.json`, the `.rh/agents/*.md` role files and `.rh/CHECKLIST.md` in this directory, non-destructively (never overwrites without `--force` backup); project name = the directory, changeable with `rh env set project.name=`; skippable questionnaire per §2 |
+| `rh env show` / `env list` | 0–2 | read and validate the config + `.rh/ENVIRONMENT.md` notes |
+| `rh env set KEY=VALUE ...` | 0 | writes `.rh/env.json` (the only config file); `rh env show` reads it back |
 | `rh add note\|literature\|gaps\|log <h> -m "..."` | 3+ | appends under a heading, creating it if missing; literature accepts a DOI |
 | `rh search <query>` | any | rg-first local search over `.rh/` + artifacts, no indexing |
 | `rh add task / plan import` | 4–6 | mirrors PLAN.md steps into the board (`rh plan import`) |
 | `rh tasks set <id> idle\|working\|complete` | 5–6 | board state (subtask ids work too); `rh tasks` shows every task, subtask and status |
 | `rh phase` / `rh phase N` | any | no argument: the current phase and its exit gate. With N: **gated** advance, refusing unmet gates; `--force` is a waiver → record it in STATUS.md (rule 11) |
-| `rh resume` / `rh -r` | any | execs the Orchestrator **in this terminal**: command from `agents.commands.orchestrator`, model + thinking level from `agents.roles.orchestrator`, only `agents.skills` loaded, `--prompt-file` for this session's instructions. `--dry-run` prints the exact command |
+| `rh resume` / `rh -r` | any | execs the Orchestrator **in this terminal**: command from `agents.commands.orchestrator` (which wires `.rh/agents/orchestrator.md` in as the system prompt), model + thinking level from `agents.roles.orchestrator`, only `agents.skills` loaded. Its first message is the skill read, not project state; it is not echoed to the terminal. `--dry-run` prints the exact command + prompt |
 | `rh spawn <role> [prompt]` | any | opens another role agent with `agents.commands.<role>` + `agents.spawn`; `{agent_file}` puts `.rh/agents/<role>.md` in the template's system-prompt flag, board tasks + session facts go in the prompt; `--dry-run`, `--inline`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | any | opens a plain shell terminal (not an agent) in a new pane: shell from `agents.shell`/`$SHELL`, layout from `agents.split`; `--dry-run`, `--split` |
-| `rh agents [ROLE] [--write]` | any | list or show the per-role files in `.rh/agents/`; `--write` creates them from the built-in defaults |
-| `rh checklist` | any | live Orchestrator checklist: SKILL.md §0 rules + each phase exit gate + content checks, checked against disk; `--json` for agents |
-| `rh doctor` | any | verify what ENV.md names (shell, split, templates, role files, binaries) |
+| `rh agents [ROLE] [--write]` | any | list or show the per-role files in `.rh/agents/`; `--write` creates a missing one (init already scaffolds the starter roles) |
+| `rh doctor` | any | verify what env.json names (shell, split, templates, role files, binaries) |
 | `rh agent status` / `rh gate check` / `rh log tail` / `rh handoff` | any | running agents from spawns.jsonl, gate report, §7 logs, fresh-session pack (rule 14) |
 | `rh info [FILE.md]` | any | what an artifact is for: owner, phase, required sections, template, rules. Read it before writing any artifact |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd` as ASCII (renderer-dependent); `--tools` lists renderers; `--example` prints a starter source |
@@ -613,7 +636,7 @@ Contracts that keep the two layers consistent:
 6. **`--json` works on every command** for agent reads; never parse the pretty UI.
 
 7. **Launch commands are configuration, not code.** `rh` hardcodes no agent
-   flag: `agents.commands.<role>` and `agents.spawn` in `.rh/ENV.md` are the
+   flag: `agents.commands.<role>` and `agents.spawn` in `.rh/env.json` are the
    source, and `rh` only substitutes `{model}` `{thinking}` `{skills}` `{prompt}`
    `{prompt_file}` `{agent_file}` `{root}` `{name}` `{role}` (`{command}` in `agents.spawn`; the shell
    for terminal mode and the pane layout come from `agents.shell`/`agents.split`, asked
@@ -622,6 +645,6 @@ Contracts that keep the two layers consistent:
    path, the harness flag itself is in the template.
    A template that leaves `{model}`, `{thinking}` or `{skills}` out still runs,
    but `rh resume`/`rh spawn` say so in their notes — that warning means the
-   session is not the one the ENV.md promised, so fix the command with the user.
+   session is not the one env.json promised, so fix the command with the user.
    Only `agents.skills` may be loaded: fewer skills, smaller context, and the
    skill stays authoritative.

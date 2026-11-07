@@ -1,6 +1,6 @@
-"""ENV.md-authored launch commands → argv, plus the role prompts agents receive.
+"""env.json-authored launch commands → argv, plus the role prompts agents receive.
 
-Nothing about *how* an agent CLI starts is hardcoded here. `.rh/ENV.md` carries
+Nothing about *how* an agent CLI starts is hardcoded here. `.rh/env.json` carries
 `agents.commands.<role>` (one launch template per role) and `agents.spawn` (how a
 parallel agent is opened); the user or the Orchestrator writes them. This module
 only substitutes values into those templates and runs the result, so the same
@@ -12,10 +12,11 @@ Placeholders understood in a command template:
   {prompt}          the full role prompt (one argv element, newlines intact)
   {prompt_file}     path of the prompt file written under `.rh/`
   {agent_file}      path of `.rh/agents/<role>.md` — use it in the CLI's
-                    system-prompt area (e.g. `--system-prompt-file {agent_file}`)
+                    system-prompt-append area (e.g. pi: `--append-system-prompt
+                    {agent_file}`; never a flag that REPLACES the system prompt)
   {agent_file_contents}  contents of `.rh/agents/<role>.md` inline (for harnesses
                     that take the text, not a path)
-  {root} {name}     project root, project name (from .rh/ENV.md)
+  {root} {name}     project root, project name (from .rh/env.json)
   {provider} {model} {thinking}   from `agents.roles.<role>`
   {skills}          comma-joined `agents.skills`
   {skills:list}     ONE token per skill, no flag attached (bare token only; for
@@ -26,8 +27,9 @@ Placeholders understood in a command template:
 
 A template that omits `{model}`, `{thinking}` or `{skills}` is not an error (the
 user may want their harness defaults), but `launch_plan()` reports it in `notes`
-so `rh resume`/`rh spawn` can tell the user their ENV.md is not being honoured.
+so `rh resume`/`rh spawn` can tell the user their env.json is not being honoured.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,6 +37,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -45,15 +48,27 @@ from .tasks import TaskStore, phase_name
 # --- roles (SKILL.md §5) -------------------------------------------------------
 # No hardcoded role info. Roles are files: `.rh/agents/<role>.md` (see agents.py).
 # The set is whatever the user defines there and/or in
-# `agents.commands.<role>` in `.rh/ENV.md`.
+# `agents.commands.<role>` in `.rh/env.json`.
 
 # --- template engine ----------------------------------------------------------
 
 # `{name}` but not `${name}` (shell variables in a spawn template survive intact)
 _PLACEHOLDER = re.compile(r"(?<!\$)\{(\w+)\}")
 
-PLACEHOLDERS = ("role", "agent", "prompt", "prompt_file", "agent_file",
-                "agent_file_contents", "root", "name", "provider", "model", "thinking", "skills")
+PLACEHOLDERS = (
+    "role",
+    "agent",
+    "prompt",
+    "prompt_file",
+    "agent_file",
+    "agent_file_contents",
+    "root",
+    "name",
+    "provider",
+    "model",
+    "thinking",
+    "skills",
+)
 SPAWN_PLACEHOLDERS = PLACEHOLDERS + ("command",)
 
 
@@ -67,7 +82,9 @@ def _uniq(items: list[str]) -> list[str]:
     return out
 
 
-def substitute(text: str, values: dict[str, str], notes: list[str] | None = None) -> str:
+def substitute(
+    text: str, values: dict[str, str], notes: list[str] | None = None
+) -> str:
     """Replace `{placeholder}` in `text`. Unknown/lowercase names are reported."""
 
     def repl(m: re.Match) -> str:
@@ -75,7 +92,7 @@ def substitute(text: str, values: dict[str, str], notes: list[str] | None = None
         if name in values:
             value = values[name]
             if not value and notes is not None:
-                notes.append(f"`{{{name}}}` is empty in .rh/ENV.md")
+                notes.append(f"`{{{name}}}` is empty in .rh/env.json")
             return value
         # uppercase braces are usually shell (${HOME}); only flag lowercase typos
         if name.islower() and notes is not None:
@@ -86,7 +103,7 @@ def substitute(text: str, values: dict[str, str], notes: list[str] | None = None
 
 
 def role_spec(env: dict, role: str) -> dict:
-    """provider/model/thinking for `role` from the ENV.md config block."""
+    """provider/model/thinking for `role` from `.rh/env.json`."""
     roles = (env.get("agents") or {}).get("roles") or {}
     spec = roles.get(role) or {}
     if not isinstance(spec, dict):
@@ -114,11 +131,13 @@ def find_template(env: dict, role: str) -> tuple[str, str]:
     return "", ""
 
 
-def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path) -> dict:
-    """Resolve the argv that starts `role`, using the command written in ENV.md.
+def launch_plan(
+    root: Path, env: dict, role: str, prompt: str, prompt_file: Path
+) -> dict:
+    """Resolve the argv that starts `role`, using the command written in env.json.
 
     Returns {argv, source, template, provider, model, thinking, skills, notes}.
-    `argv` is None when ENV.md names neither a command template nor a CLI.
+    `argv` is None when env.json names neither a command template nor a CLI.
     """
     role = (role or "orchestrator").strip().lower()
     spec = role_spec(env, role)
@@ -132,6 +151,7 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
     agent_file_contents = ""
     try:
         from . import agents as _agents
+
         agent_file_path = str(_agents.role_file(root, role))
         agent_file_contents = _agents.read_role(root, role) or ""
     except (ImportError, OSError):
@@ -168,24 +188,32 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
         if not cli:
             plan["error"] = (
                 f"no launch command for '{role}': set agents.commands.{role} "
-                "(or agents.commands.default) in .rh/ENV.md — e.g. "
+                "(or agents.commands.default) in .rh/env.json — e.g. "
                 "rh env set agents.commands.default='pi --model {model}'"
             )
         else:
             plan["argv"] = [cli, prompt]
             plan["source"] = "agents.cli (fallback)"
             notes.append(
-                "no agents.commands.<role>/default in .rh/ENV.md — fell back to "
+                "no agents.commands.<role>/default in .rh/env.json — fell back to "
                 f"`{cli} <prompt>`; add a template to pass the model"
             )
             if spec["model"]:
-                notes.append(f"model {spec['model']} is NOT passed (no {{model}} in the command)")
+                notes.append(
+                    f"model {spec['model']} is NOT passed (no {{model}} in the command)"
+                )
             if spec["thinking"]:
-                notes.append(f"thinking level {spec['thinking']} is NOT passed (no {{thinking}})")
+                notes.append(
+                    f"thinking level {spec['thinking']} is NOT passed (no {{thinking}})"
+                )
             if skills:
-                notes.append("skills are described in the prompt but not restricted at the CLI")
+                notes.append(
+                    "skills are described in the prompt but not restricted at the CLI"
+                )
         if not spec["model"]:
-            notes.append(f"agents.roles.{role}.model is empty — the harness default model will run")
+            notes.append(
+                f"agents.roles.{role}.model is empty — the harness default model will run"
+            )
         plan["notes"] = _uniq(notes)
         return plan
 
@@ -204,7 +232,9 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
     # Split first, then substitute per token so a prompt with spaces/commas/quotes
     # stays exactly one argv element. A placeholder that resolves to "" drops the
     # flag that introduced it (`--model {model}` with no model set → no flag).
-    empty = {name for name in ("provider", "model", "thinking", "skills") if not values[name]}
+    empty = {
+        name for name in ("provider", "model", "thinking", "skills") if not values[name]
+    }
     argv: list[str] = []
     # Named whole-token expansions that produce 0+ argv elements:
     #   {skills:list} → ONE token per skill (for `--skill a --skill b` style flags,
@@ -226,7 +256,7 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
             continue
         rendered = substitute(tok, values, notes)
         if re.fullmatch(r"--[\w-]+=", rendered):
-            notes.append(f"`{rendered}` dropped — that value is empty in .rh/ENV.md")
+            notes.append(f"`{rendered}` dropped — that value is empty in .rh/env.json")
             continue
         argv.append(rendered)
     if "{prompt}" not in template and "{prompt_file}" not in template:
@@ -238,10 +268,13 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
         return plan
     plan["argv"] = argv
     if spec["model"] and "{model}" not in template:
-        notes.append(f"model {spec['model']} is NOT passed — add `--model {{model}}` to {source}")
+        notes.append(
+            f"model {spec['model']} is NOT passed — add `--model {{model}}` to {source}"
+        )
     if spec["thinking"] and "{thinking}" not in template:
         notes.append(f"thinking {spec['thinking']} is NOT passed — add it to {source}")
-    if skills and "{skills}" not in template:
+    if skills and "{skills}" not in template and role != "orchestrator":
+        # the orchestrator deliberately sees every skill — it assigns them
         notes.append(
             f"skills {', '.join(skills)} are in the prompt but not restricted at the CLI — "
             f"add the harness flag to {source} (e.g. one `--skill` per name, expanded from {{skills}})"
@@ -249,16 +282,18 @@ def launch_plan(root: Path, env: dict, role: str, prompt: str, prompt_file: Path
     if "{agent_file}" not in template:
         notes.append(
             f"{{agent_file}} is not in {source} — .rh/agents/{role}.md is not wired into the "
-            "harness's system prompt (use the harness's flag, e.g. --system-prompt-file {agent_file})"
+            "harness's system prompt (use the harness's flag, e.g. --append-system-prompt {agent_file})"
         )
     if not spec["model"]:
-        notes.append(f"agents.roles.{role}.model is empty — the harness default model will run")
+        notes.append(
+            f"agents.roles.{role}.model is empty — the harness default model will run"
+        )
     plan["notes"] = _uniq(notes)
     return plan
 
 
 def detect_shell(env: dict | None = None) -> str:
-    """User shell: agents.shell in ENV.md, else $SHELL, else sh. Never probes binaries."""
+    """User shell: agents.shell in env.json, else $SHELL, else sh. Never probes binaries."""
     env = env or {}
     cfg = str((env.get("agents") or {}).get("shell") or "").strip()
     if cfg:
@@ -268,13 +303,15 @@ def detect_shell(env: dict | None = None) -> str:
 
 
 def detect_split(env: dict | None = None) -> str:
-    """Pane layout: agents.split in ENV.md, else '' (the Orchestrator asks the user)."""
+    """Pane layout: agents.split in env.json, else '' (the Orchestrator asks the user)."""
     env = env or {}
     raw = str((env.get("agents") or {}).get("split") or "").strip().lower()
     return "window" if raw in ("new-window", "new_workspace", "workspace") else raw
 
 
-def terminal_plan(root: Path, env: dict, command: str, split: str | None = None) -> dict:
+def terminal_plan(
+    root: Path, env: dict, command: str, split: str | None = None
+) -> dict:
     """Plan for opening a plain shell terminal (not an agent) in a pane/window.
 
     One-shot: `shell -c command`. Layout comes from agents.split. Returns
@@ -284,7 +321,9 @@ def terminal_plan(root: Path, env: dict, command: str, split: str | None = None)
     chosen = (split or "").strip().lower() or detect_split(env)
     notes: list[str] = []
     if not chosen:
-        notes.append("agents.split is not set — ask the user: vertical-split, horizontal-split, or new workspace/window, or set agents.split=vertical|horizontal|window")
+        notes.append(
+            "agents.split is not set — ask the user: vertical-split, horizontal-split, or new workspace/window, or set agents.split=vertical|horizontal|window"
+        )
     return {
         "argv": [shell, "-c", command],
         "shell": shell,
@@ -295,14 +334,21 @@ def terminal_plan(root: Path, env: dict, command: str, split: str | None = None)
 
 
 def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
-    """What `rh spawn` would run: an ENV.md pane template, or a background process."""
+    """What `rh spawn` would run: an env.json pane template, or a background process."""
     if not plan.get("argv"):
-        return {"mode": "none", "command": "", "log": "", "notes": list(plan.get("notes") or [])}
+        return {
+            "mode": "none",
+            "command": "",
+            "log": "",
+            "notes": list(plan.get("notes") or []),
+        }
     template = str((env.get("agents") or {}).get("spawn") or "").strip()
     if template:
         notes: list[str] = []
         values = {
-            "role": role, "agent": role, "root": str(root),
+            "role": role,
+            "agent": role,
+            "root": str(root),
             "name": str((env.get("project") or {}).get("name") or ""),
             "prompt_file": plan.get("prompt_file", ""),
             "provider": plan.get("provider", ""),
@@ -311,11 +357,20 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
             "skills": ",".join(plan.get("skills") or []),
             "command": shlex.join(plan["argv"]),
         }
-        return {"mode": "pane", "command": substitute(template, values, notes),
-                "log": "", "notes": _uniq(notes)}
+        return {
+            "mode": "pane",
+            "command": substitute(template, values, notes),
+            "log": "",
+            "notes": _uniq(notes),
+        }
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     log = paths.logs_dir(root) / f"spawn-{slugify(role)}-{stamp}.log"
-    return {"mode": "background", "command": shlex.join(plan["argv"]), "log": str(log), "notes": []}
+    return {
+        "mode": "background",
+        "command": shlex.join(plan["argv"]),
+        "log": str(log),
+        "notes": [],
+    }
 
 
 def spawn_now(root: Path, env: dict, role: str, plan: dict) -> dict:
@@ -325,8 +380,15 @@ def spawn_now(root: Path, env: dict, role: str, plan: dict) -> dict:
 
 def terminal_preview(root: Path, env: dict, plan: dict) -> dict:
     """`spawn_preview` for a shell terminal (no agent, role=`terminal`)."""
-    synthetic = {"argv": plan["argv"], "prompt_file": "", "provider": "",
-                 "model": "", "thinking": "", "skills": [], "notes": []}
+    synthetic = {
+        "argv": plan["argv"],
+        "prompt_file": "",
+        "provider": "",
+        "model": "",
+        "thinking": "",
+        "skills": [],
+        "notes": [],
+    }
     preview = spawn_preview(root, env, "terminal", synthetic)
     preview["shell"] = plan["shell"]
     preview["split"] = plan.get("split", "")
@@ -334,7 +396,9 @@ def terminal_preview(root: Path, env: dict, plan: dict) -> dict:
     return preview
 
 
-def spawn_terminal_now(root: Path, env: dict, plan: dict, preview: dict | None = None) -> dict:
+def spawn_terminal_now(
+    root: Path, env: dict, plan: dict, preview: dict | None = None
+) -> dict:
     """Start the shell terminal planned by `terminal_plan`."""
     return _start(root, "terminal", plan, preview or terminal_preview(root, env, plan))
 
@@ -342,7 +406,9 @@ def spawn_terminal_now(root: Path, env: dict, plan: dict, preview: dict | None =
 def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
     """Run a preview: pane template or detached process. Records the spawn."""
     if preview["mode"] == "pane":
-        proc = subprocess.run(preview["command"], shell=True, cwd=str(root), check=False)
+        proc = subprocess.run(
+            preview["command"], shell=True, cwd=str(root), check=False
+        )
         preview["returncode"] = proc.returncode
         _spawn_record(root, role, plan, None, "pane")
         return preview
@@ -352,22 +418,32 @@ def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as fh:
         proc = subprocess.Popen(
-            plan["argv"], cwd=str(root), stdin=subprocess.DEVNULL,
-            stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
+            plan["argv"],
+            cwd=str(root),
+            stdin=subprocess.DEVNULL,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
     preview["pid"] = proc.pid
     _spawn_record(root, role, plan, proc.pid, "background")
     return preview
 
 
-def _spawn_record(root: Path, role: str, plan: dict, pid: int | None, mode: str) -> None:
+def _spawn_record(
+    root: Path, role: str, plan: dict, pid: int | None, mode: str
+) -> None:
     """Append one JSON line per spawn to .rh/logs/spawns.jsonl (agent status + budget)."""
     log_dir = paths.logs_dir(root)
     log_dir.mkdir(parents=True, exist_ok=True)
     rec = {
-        "role": role, "pid": pid, "mode": mode,
-        "model": plan.get("model", ""), "source": plan.get("source", ""),
-        "log": "", "ts": datetime.now().isoformat(),
+        "role": role,
+        "pid": pid,
+        "mode": mode,
+        "model": plan.get("model", ""),
+        "source": plan.get("source", ""),
+        "log": "",
+        "ts": datetime.now().isoformat(),
     }
     with (log_dir / "spawns.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec) + "\n")
@@ -408,7 +484,13 @@ def exec_argv(root: Path, argv: list[str]) -> tuple[bool, str]:
     """
     root = root.resolve()
     if not (root / paths.RH_DIR).is_dir():
-        return False, f"{root} has no .rh/ — refusing to open an agent in the wrong project"
+        return (
+            False,
+            f"{root} has no .rh/ — refusing to open an agent in the wrong project",
+        )
+    # exec replaces this process: buffered UI would otherwise vanish in a pipe
+    sys.stdout.flush()
+    sys.stderr.flush()
     os.chdir(root)
     try:
         os.execvp(argv[0], argv)
@@ -419,6 +501,7 @@ def exec_argv(root: Path, argv: list[str]) -> tuple[bool, str]:
 
 # --- role prompt --------------------------------------------------------------
 
+
 def role_tasks(store: TaskStore, role: str, limit: int = 8) -> list[dict]:
     """Board tasks owned by `role` (the Orchestrator sees the whole next-up list)."""
     tasks = store.list()
@@ -426,11 +509,14 @@ def role_tasks(store: TaskStore, role: str, limit: int = 8) -> list[dict]:
     owned = [t for t in tasks if str(t.get("owner") or "").lower() == role]
     if not owned and role == "orchestrator":
         owned = tasks
-    return sorted(owned, key=lambda t: (prio.get(t["state"], 3), t["phase"], t["id"]))[:limit]
+    return sorted(owned, key=lambda t: (prio.get(t["state"], 3), t["phase"], t["id"]))[
+        :limit
+    ]
 
 
-def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
-                      extra: str = "") -> str:
+def build_role_prompt(
+    root: Path, env: dict, role: str, store: TaskStore, extra: str = ""
+) -> str:
     """The prompt `rh spawn` hands to a role agent.
 
     Role definition comes from `.rh/agents/<role>.md` (the Orchestrator's
@@ -440,6 +526,7 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
     role = (role or "").strip().lower()
     try:
         from . import agents as agents_mod
+
         role_file_text = agents_mod.read_role(root, role)
         agent_path = str(agents_mod.role_file(root, role))
     except (ImportError, OSError):
@@ -450,8 +537,11 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
     project_name = (env.get("project") or {}).get("name") or "untitled"
     current = store.current_phase()
     gate = config.phase_gate(root, env)
-    model_line = (f"{spec['provider']}/{spec['model']}"
-                  if spec["provider"] and spec["model"] else spec["model"] or "not set in .rh/ENV.md")
+    model_line = (
+        f"{spec['provider']}/{spec['model']}"
+        if spec["provider"] and spec["model"]
+        else spec["model"] or "not set in .rh/env.json"
+    )
     if spec["thinking"]:
         model_line += f" (thinking: {spec['thinking']})"
     lines = [
@@ -462,7 +552,10 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
         "",
     ]
     if role_file_text:
-        lines += ["## Role file (.rh/agents/<role>.md) — this is your tailored job description:", ""]
+        lines += [
+            "## Role file (.rh/agents/<role>.md) — this is your tailored job description:",
+            "",
+        ]
         lines += role_file_text.strip().splitlines()
         lines += [""]
     else:
@@ -474,10 +567,14 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
             "",
         ]
     lines += [
-        ("Load exactly these skills for this session, and no others "
-         "(keeping the session lean is the point):"),
+        (
+            "Load exactly these skills for this session, and no others "
+            "(keeping the session lean is the point):"
+        ),
     ]
-    lines += [f"  - {s}" for s in skills] or ["  - (none configured — ask the Orchestrator)"]
+    lines += [f"  - {s}" for s in skills] or [
+        "  - (none configured — ask the Orchestrator)"
+    ]
     lines += [
         "Then follow the research-helper skill exactly — it is law, not advice",
         "(SKILL.md §0 non-negotiables; ask before every state-changing action).",
@@ -504,8 +601,13 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
                 bits.append(f"after: {', '.join(t['depends_on'])}")
             lines.append("  - " + " · ".join(bits))
     else:
-        lines += ["", ("No board tasks for this role yet — the Orchestrator mirrors PLAN.md "
-                       "into the board with `rh plan import`.")]
+        lines += [
+            "",
+            (
+                "No board tasks for this role yet — the Orchestrator mirrors PLAN.md "
+                "into the board with `rh plan import`."
+            ),
+        ]
     lines += [
         "",
         "Report back with: what you changed (files), the evidence (command + number),",
@@ -513,5 +615,9 @@ def build_role_prompt(root: Path, env: dict, role: str, store: TaskStore,
         "the Orchestrator — that file is its own work (SKILL.md rule 9).",
     ]
     if extra:
-        lines += ["", "Instructions from the Orchestrator/user for this session:", extra.strip()]
+        lines += [
+            "",
+            "Instructions from the Orchestrator/user for this session:",
+            extra.strip(),
+        ]
     return "\n".join(lines)

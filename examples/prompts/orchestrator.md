@@ -16,7 +16,8 @@ Order of work this session:
 
 1. `rh phase` → the current phase and its unmet gate.
 2. `rh tasks --state working` → what is actually in flight.
-3. Re-read `.rh/ENV.md` (config block + environment notes) — it may have moved.
+3. Re-read `.rh/env.json` (config) and `.rh/ENVIRONMENT.md` (notes) — they may have moved.
+   Work `.rh/CHECKLIST.md` top to bottom.
 4. Only then act, in small steps, updating `STATUS.md` after each one.
 
 `rh info <FILE.md>` describes any artifact before you write it. If a rule cannot

@@ -14,8 +14,9 @@ from pathlib import Path
 from . import paths
 
 SEARCHABLE_SUFFIXES = {".md", ".txt", ".json", ".bib", ".tex"}
-SEARCHABLE_NAMES = {"ENV.md", "PROBLEM.md", "PLAN.md", "STATUS.md", "LITERATURE.md",
-                    "OUTPUT_LAYOUT.md", "GAPS.md", "MANUSCRIPT.md", "tasks.json", "env.json"}
+SEARCHABLE_NAMES = {"ENVIRONMENT.md", "CHECKLIST.md", "PROBLEM.md", "PLAN.md", "STATUS.md",
+                    "LITERATURE.md", "OUTPUT_LAYOUT.md", "GAPS.md", "MANUSCRIPT.md",
+                    "tasks.json", "env.json"}
 
 
 @dataclass

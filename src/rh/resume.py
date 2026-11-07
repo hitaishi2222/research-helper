@@ -1,8 +1,8 @@
 """`rh resume` — run the agent harness in THIS terminal with a go-forward prompt.
 
-Flow: load .rh/ENV.md config (phase-0 gate required) → pick agent CLI (config
-`agents.cli`, else the detected one, else ask) → build the prompt from live
-project state → write .rh/resume-prompt.md → exec the agent in place.
+Flow: load .rh/env.json config (phase-0 gate required) → resolve the launch
+command (agents.commands.orchestrator, else agents.cli) → write the short
+skill-read prompt to .rh/resume-prompt.md → exec the harness in place, silently.
 
 Exec-in-place is deliberate: the Orchestrator must run where the user called
 it. Parallel agents spawned later by the Orchestrator are its own business
@@ -14,8 +14,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import paths, ui
-from .tasks import TaskStore, phase_name
+from . import ui
+from .tasks import TaskStore
 
 AGENT_CLIS = ("pi", "opencode", "claude", "codex", "gemini", "aider", "goose")
 
@@ -53,64 +53,38 @@ def next_tasks(store: TaskStore) -> list[dict]:
     return sorted(tasks, key=lambda t: (prio.get(t["state"], 3), t["phase"], t["id"]))[:5]
 
 
-def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str = "") -> str:
-    project_name = env.get("project", {}).get("name") or "untitled"
+def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str = "",
+                 include_role_file: bool = False) -> str:
+    """The FIRST message the harness receives: load the skill, then follow it.
+
+    Deliberately short. Project state lives in `.rh/CHECKLIST.md` / `rh phase` /
+    `.rh/STATUS.md`, so the orchestrator reads it live instead of trusting a
+    snapshot printed here. `include_role_file` is the fallback for a launch
+    template that does not wire `.rh/agents/orchestrator.md` into the harness
+    system prompt: then the role file is prepended to this prompt instead.
+    """
     agents = env.get("agents", {}) or {}
     skills = agents.get("skills") or ["research-helper"]
-    orch = (agents.get("roles") or {}).get("orchestrator") or {}
-    if not isinstance(orch, dict):
-        orch = {}
-    model = str(orch.get("model") or "")
-    provider = str(orch.get("provider") or "")
-    thinking = str(orch.get("thinking") or "")
-    session = (f"{provider}/{model}" if provider and model else model) or "not set in .rh/ENV.md"
-    if thinking:
-        session += f" · thinking: {thinking}"
-    current = gate["phase"]
-    lines = [
-        f"You are the Orchestrator for the research project '{project_name}'.",
-        f"Project root (verify you are here before writing anything): {root}",
-        f"Session model (agents.roles.orchestrator): {session}",
-        "",
-        "Load exactly these skills for this session, and no others — nothing else,",
-        "so the context stays small and the pipeline stays authoritative:",
-    ]
-    lines += [f"  - {s}" for s in skills]
+    lines: list[str] = []
+    if include_role_file:
+        try:
+            from . import agents as agents_mod
+            role_text = (agents_mod.read_role(root, "orchestrator") or "").strip()
+        except (ImportError, OSError):
+            role_text = ""
+        if role_text:
+            lines += [role_text, "", "---", ""]
     lines += [
-        "Then follow the research-helper skill exactly — it is law, not advice",
-        "(SKILL.md §0 non-negotiables; ask before every state-changing action).",
+        f"Load the `{skills[0]}` skill now, then follow it exactly — it is law, not advice.",
+        f"Skills for this session (and only these): {', '.join(skills)}.",
+        f"Project root: {root}",
         "",
-        f"Current phase: {phase_name(current)}",
-    ]
-
-    if gate["problems"]:
-        lines.append("Unmet gates (resolve these first, or ask the user to waive):")
-        lines += [f"  - {p}" for p in gate["problems"]]
-    else:
-        lines.append("Gates: all satisfied for the current phase.")
-    tasks = next_tasks(store)
-    if tasks:
-        lines.append("Next tasks:")
-        lines += [f"  - [{t['state']}] {t['id']} {t['title']}" for t in tasks]
-    else:
-        lines.append("No tasks on the board — mirror PLAN.md steps (`rh plan import`) or proceed by phase.")
-    lines += [
-        "",
-        "Start by re-reading, never caching (SKILL.md §0 rules 9 and 10):",
-        f"  - {paths.env_md(root)} (config block + environment notes)",
-        f"  - {paths.artifact_path(root, 'STATUS.md')}" if paths.artifact_path(root, "STATUS.md").exists()
-        else "  - STATUS.md (does not exist yet — create it in phase 5, not before)",
-        "  - `rh info <FILE.md>` describes any artifact before you write it",
-        "",
-        "Then continue the pipeline from the current phase. Do not skip exit gates;",
-        "do not pick models (they live in the ENV.md config block).",
-        "You own STATUS.md — update it yourself after every step; never delegate that.",
-        "",
-        "To put another role to work, use the launch commands from .rh/ENV.md:",
-        "  rh spawn <role> \"<instructions>\"      # literature | researcher | reviewer | critique | writer",
+        "Your checklist is `.rh/CHECKLIST.md` — read it first and work it top to bottom.",
+        "Then `rh phase` and `.rh/STATUS.md`. Ask the user before every state-changing",
+        "action (SKILL.md §0.3).",
     ]
     if extra:
-        lines += ["", "User instructions for this session:", extra]
+        lines += ["", "User instructions for this session:", extra.strip()]
     return "\n".join(lines)
 
 

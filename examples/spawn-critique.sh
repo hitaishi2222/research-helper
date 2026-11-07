@@ -10,8 +10,8 @@ PHASE="${1:-7}"                               # phase being critiqued
 FOCUS="${2:-<the claims, numbers or artifacts to attack>}"
 
 echo "project: $ROOT · phase $PHASE"
-if [ ! -f "$ROOT/.rh/ENV.md" ]; then
-  echo "✗ no .rh/ENV.md in $ROOT — verify the path before opening an agent" >&2
+if [ ! -f "$ROOT/.rh/env.json" ]; then
+  echo "✗ no .rh/env.json in $ROOT — verify the path before opening an agent" >&2
   exit 1
 fi
 

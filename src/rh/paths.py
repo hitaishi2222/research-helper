@@ -1,6 +1,6 @@
 """Project root discovery + .rh/ layout.
 
-Priority: explicit --root, RH_ROOT, cwd walk-up for `.rh/` (ENV.md is inside .rh/), cwd.
+Priority: explicit --root, RH_ROOT, cwd walk-up for `.rh/`, cwd.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ RH_DIR = ".rh"
 
 # Files kept under .rh/ (clean workspace). src/, results/, papers/ stay at root.
 RH_ARTIFACTS = {
+    "ENVIRONMENT.md": "environment_md",
     "PROBLEM.md": "problem_md",
     "PLAN.md": "plan_md",
     "STATUS.md": "status_md",
@@ -25,7 +26,7 @@ RH_ARTIFACTS = {
 
 def find_project_root(start: Path | None = None) -> Path:
     start = (start or Path.cwd()).resolve()
-    # walk up looking for .rh/ (ENV.md is now inside .rh/)
+    # walk up looking for .rh/ (everything lives inside it)
     cur = start
     for parent in [cur, *cur.parents]:
         if (parent / RH_DIR).is_dir():
@@ -71,7 +72,7 @@ def archive_tree(root: Path, src: Path) -> Path:
 
     The copy is made *before* the removal, so a failed copy leaves `src`
     untouched. Used by `rh init --clean`, which must never delete what it could
-    not archive (event logs, notes, ENV.md, tasks.json) — and must not throw
+    not archive (event logs, notes, env.json, tasks.json) — and must not throw
     away earlier archives either: they are re-filed beside the new one.
     """
     tmp = src.with_name(f"{src.name}.archiving-{os.getpid()}")
@@ -114,7 +115,18 @@ def ensure_layout(root: Path) -> Path:
 
 
 def env_json(root: Path) -> Path:
+    """The single config file (SKILL.md §2 config block)."""
     return rh_dir(root) / "env.json"
+
+
+def environment_md(root: Path) -> Path:
+    """The Orchestrator's phase-2 environment notes (prose, not config)."""
+    return rh_dir(root) / "ENVIRONMENT.md"
+
+
+def checklist_md(root: Path) -> Path:
+    """The Orchestrator's generated setup + gate checklist."""
+    return rh_dir(root) / "CHECKLIST.md"
 
 
 def tasks_json(root: Path) -> Path:
@@ -137,7 +149,7 @@ def papers_dir(root: Path) -> Path:
 
 
 def env_md(root: Path) -> Path:
-    """ENV.md lives inside .rh/ (config block + environment notes)."""
+    """Legacy pre-0.2 location, used only by the one-time migration."""
     return rh_dir(root) / "ENV.md" if rh_dir(root).exists() else root / "ENV.md"
 
 
@@ -148,10 +160,10 @@ def artifact_path(root: Path, name: str) -> Path:
     callers should read from root and write through to .rh (or keep both in
     sync). Prefer .rh when initialized.
 
-    ENV.md is always in .rh/ when initialized.
+    ENVIRONMENT.md is always in .rh/ when initialized.
     """
-    if name == "ENV.md":
-        return env_md(root)
+    if name == "ENVIRONMENT.md":
+        return environment_md(root)
 
     in_rh = rh_dir(root) / name
     legacy = root / name

@@ -1,6 +1,6 @@
-"""`rh doctor` — verify what ENV.md names actually works on this machine.
+"""`rh doctor` — verify what env.json names actually works on this machine.
 
-Checks are by name only: does the binary, shell, or file ENV.md names exist?
+Checks are by name only: does the binary, shell, or file env.json names exist?
 `rh doctor` never decides what the user should use — it only reports whether
 the named thing is where the command expects it to be.
 """
@@ -36,9 +36,10 @@ def check(root: Path, env: dict | None = None) -> dict:
     # workspace
     rh = paths.rh_dir(root)
     add("workspace", rh.is_dir(), f".rh/ at {rh}" if rh.is_dir() else f"{rh} missing — run `rh init`")
-    env_file = paths.env_md(root) if rh.is_dir() else root / "ENV.md"
-    add("env-md", env_file.exists() and config.parse_env_md(env_file) is not None,
-        str(env_file) if env_file.exists() else f"{env_file} missing")
+    # config: the single file `rh env set` writes
+    env_file = paths.env_json(root)
+    add("env-json", env_file.exists() and config.config_written(root),
+        str(env_file) if env_file.exists() else f"{env_file} missing — run `rh init` / phase 0")
 
     # shell: agents.shell, else $SHELL, else sh — named shell verifies on PATH
     shell = detect_shell(env)
@@ -95,7 +96,7 @@ def check(root: Path, env: dict | None = None) -> dict:
     if not configured:
         add("commands", False,
             "no agents.commands.<role> template set — rh resume/spawn have nothing to run; "
-            "copy an examples/envs/*.sh snippet")
+            "pick a harness at `rh init` or add one (`rh env set agents.commands.orchestrator=...`)")
 
     # spawn template splittable
     spawn_tmpl = (env.get("agents") or {}).get("spawn") or ""

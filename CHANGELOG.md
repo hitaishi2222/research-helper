@@ -4,6 +4,77 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.1.3] — 2026-11-07
+
+Fixes from the second test pass: one config file, a real Orchestrator to-do list
+at init, role files at init, and a silent `rh resume`.
+
+### Changed (breaking)
+
+- **`.rh/ENV.md` is gone.** `.rh/env.json` is the single config file: `rh env set`
+  writes it, `rh env show` reads it, and nothing wraps JSON in Markdown anymore.
+  The Orchestrator's free-form environment notes moved to the phase-2 artifact
+  `.rh/ENVIRONMENT.md`, so config and prose never share a file. A legacy
+  `.rh/ENV.md` (or a root `ENV.md`) is folded into `env.json` +
+  `ENVIRONMENT.md` on first read and the Markdown is archived to
+  `.rh/.bak/<timestamp>/` — never deleted.
+- `rh env show` prints the config plus `.rh/ENVIRONMENT.md`; `rh doctor` checks
+  `env.json` (`env-json` instead of `env-md`).
+- Phase gates, `rh info`, `rh search`, `rh handoff` and `rh workflow` name
+  `.rh/ENVIRONMENT.md` / `.rh/env.json`.
+- **`rh spawn-terminal` is gone.** `rh spawn terminal <cmd>` is the only form
+  (the extra alias is no longer registered or listed).
+- **`rh checklist` is gone.** The generated `.rh/CHECKLIST.md` is the checklist;
+  the orchestrator role file (its additional system prompt) points the agent at
+  it, so there is no separate command to remember. `rh init` still writes the
+  file, and `rh handoff` still packs it.
+
+### Added
+
+- **`rh init` creates the Orchestrator's checklist** at `.rh/CHECKLIST.md`: setup
+  tasks (missing environment values to ask about, launch commands to wire, role
+  files to tailor, `workflow.mmd` after the plan) followed by every phase exit
+  gate and the SKILL.md §0 rules, each checked against disk. The orchestrator
+  role file tells the agent to read it first, so no CLI command is involved.
+- **`rh init` creates the default role files** (`.rh/agents/orchestrator.md` +
+  the starter roles) instead of leaving `rh agents --write` as a hidden step.
+  The orchestrator file carries the actual contract (owns/may/may-not, the
+  checklist, rules 9/12/13), so a fresh session knows its job immediately.
+- **A rich `rh init` questionnaire**: key hints once, then one compact question
+  frame redrawn in place (no full-screen clear). `rich.prompt` validates the
+  answer, numbered options list the agent CLIs, shells and pane backends that
+  are actually on PATH (`other` types one that is not), and Enter keeps the
+  default, Tab submits and moves on (readline/libedit binding), `s` skips the
+  key, `q` finishes with the answers so far, Ctrl-C skips the rest. Skills are
+  not asked here — that is the Orchestrator's job (`rh env set agents.skills=`).
+- **Harness start templates** (`src/rh/harnesses.json`, data only): the init
+  questionnaire's harness answer fills `agents.cli` and
+  `agents.commands.orchestrator|default` where still blank, so `rh resume` works
+  from a fresh init. Existing commands are never overwritten.
+
+### Fixed
+
+- **The `pi` harness template used flags `pi` does not have.** `--prompt-file`
+  does not exist, and `--prompt-template` is not a prompt either — it registers a
+  `/command` and sends no message, so `rh resume` opened `pi` with the prompt
+  only loaded as a slash command. The launch template now passes the prompt
+  **positionally** (`{prompt}`), and the role file goes in through
+  `--append-system-prompt {agent_file}` — never `--system-prompt`, which would
+  replace `pi`'s own system prompt. Same fix in `examples/envs/pi.sh`,
+  `examples/configure-env.sh`, README and the bundled SKILL.md.
+- **The orchestrator is no longer handed a skill restriction.** Its launch
+  template carries no `--skill`: the Orchestrator must see every skill to decide
+  which one each spawned agent is assigned. `rh` also stopped warning that
+  "skills are not restricted at the CLI" for the orchestrator role.
+- **Bad CLI usage falls back to the full `--help`** and nothing else — no
+  `error: invalid choice …` line (exit 2). `rh --help` and `rh --version` exit 0.
+- **`rh resume` no longer prints the prompt** before opening the harness. Its
+  first message is the skill read (“Load the `research-helper` skill …”), and it
+  opens the harness with `.rh/agents/orchestrator.md` wired in through
+  `{agent_file}`. If a hand-written template omits `{agent_file}`, the role file
+  is prepended to the prompt instead, so the Orchestrator knows its job from the
+  get go.
+
 ## [0.1.2] — 2026-11-07
 
 Delegation, config honesty and artifact documentation (from the ISSUES list).
@@ -218,6 +289,7 @@ with `researchhelper`).
 - `rh resume` / `rh -r`, `rh skill install`, bundled `research-helper` skill.
 - rich-based UI with `--json` on every command.
 
+[0.1.3]: https://github.com/hitaishi2222/research-helper/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/hitaishi2222/research-helper/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/hitaishi2222/research-helper/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hitaishi2222/research-helper/releases/tag/v0.1.0

@@ -8,39 +8,29 @@ guessing, so this table mirrors SKILL.md §1/§3/§8 — keep them in sync.
 from __future__ import annotations
 
 ARTIFACTS: dict[str, dict] = {
-    "ENV.md": {
-        "purpose": "The only config in the system — the JSON config block (agents, "
-                   "per-role models, tools, gates) plus the environment notes that record "
-                   "the versions the user named in phase 2.",
-        "location": ".rh/ENV.md (never the project root)",
-        "owner": "Orchestrator",
-        "phase": "0 CONFIG (block) · 2 ENVIRONMENT (notes)",
+    "ENVIRONMENT.md": {
+        "purpose": "The environment the user named in phase 2: runtimes, packages, "
+                   "simulators, hardware and versions, one line each — the source the "
+                   "manuscript's methods section copies verbatim.",
+        "location": ".rh/ENVIRONMENT.md (config itself lives in .rh/env.json)",
+        "owner": "Orchestrator (interview with the user)",
+        "phase": "2 ENVIRONMENT",
         "sections": [
-            ("```json config block``` — agents.count/backend/cli/skills/roles/commands/spawn, "
-             "literature tools, project, gates"),
-            "## Environment — the tools + versions the user named, one line each",
+            "## Environment — one line per tool the user named: <name> <version> — what it is for",
+            "dated amendments only (`- <date>: <change>`) — never re-type, never probe",
         ],
-        "template": "{\n  \"agents\": {\"count\": 2, \"backend\": \"tmux\", \"cli\": \"pi\",\n"
-                    "    \"skills\": [\"research-helper\"],\n"
-                    "    \"roles\": {\"orchestrator\": {\"provider\": \"pi\", \"model\": \"<model>\",\n"
-                    "               \"thinking\": \"high\"}},\n"
-                    "    \"commands\": {\"default\": \"pi --model {model} --thinking {thinking}\",\n"
-                    "                 \"researcher\": \"pi --model {model} --thinking {thinking}\"},\n"
-                    "    \"spawn\": \"tmux new-window -n rh-{agent} -c {root} {command}\"},\n"
-                    "  \"literature\": {\"search\": \"crw\", \"reading\": \"lit\",\n"
-                    "                 \"ref_manager\": \"none\", \"paywall\": \"ask_user\"},\n"
-                    "  \"project\": {\"name\": \"<project name>\", \"git\": false},\n"
-                    "  \"gates\": {\"user_approves_plan\": true, \"critique_veto\": true}\n"
-                    "}\n\n## Environment\n\n- meep 1.29.0 — FDTD (user-confirmed)",
+        "template": "## Environment\n\n"
+                    "- meep 1.29.0 — FDTD, 2D/3D (user-confirmed)\n"
+                    "- jax — not used; the user prefers numpy on this machine\n"
+                    "- custom solver \"foo\" 2.0 — user-named, not on PATH\n",
         "rules": [
-            "Never invent a model or tool name: the user names them (SKILL.md §2).",
+            "Never invent a version or a tool: the user names them (SKILL.md §2).",
             "A binary on PATH does not mean this project should use it — ask, do not probe.",
             "Re-read this file at the start of every phase; never cache it (rule 10).",
-            "`rh env set KEY=VALUE` rewrites the block and preserves the notes below it.",
-            ("`agents.commands.<role>` is how `rh resume`/`rh spawn` start an agent — "
-             "rh never hardcodes a CLI flag."),
+            "This is the only place versions are written; the manuscript links it.",
+            "`rh env set KEY=VALUE` writes .rh/env.json — it never touches this file.",
         ],
-        "consumers": "every phase; MANUSCRIPT.md methods copy the versions verbatim",
+        "consumers": "MANUSCRIPT.md methods copy the versions verbatim",
     },
     "PROBLEM.md": {
         "purpose": "The research question and its boundaries: why it matters, what would "
@@ -138,7 +128,7 @@ ARTIFACTS: dict[str, dict] = {
                     "- credit: <who to cite>\n- upstream fix warranted: <yes/no + why>",
         "rules": [
             "Only code actually read goes here; suspicious code goes to the Orchestrator or Critique.",
-            "Never re-type versions — link ENV.md's environment notes.",
+            "Never re-type versions — link .rh/ENVIRONMENT.md.",
         ],
         "consumers": "MANUSCRIPT.md attribution, PLAN.md risk",
     },
@@ -152,7 +142,7 @@ ARTIFACTS: dict[str, dict] = {
         "sections": [
             "### S<N> — <action> — one step per heading (ids like S04b are valid)",
             "step fields: owner · deliverable · verify · depends on · risk · kind (build|spike) · timebox",
-            "tooling — link ENV.md, never copy its versions",
+            "tooling — link .rh/ENVIRONMENT.md, never copy its versions",
             "agreement line — `agreed by <model> / <model> on <date>`",
         ],
         "template": "### S07 — <action>\nowner: researcher | deliverable: results/S07.csv\n"
@@ -204,7 +194,7 @@ ARTIFACTS: dict[str, dict] = {
                     "<!-- evidence: results/S05.csv | 10.1234/abcd §3 -->\n",
         "rules": [
             "No result without a file: an unsupported number does not exist (rule 7).",
-            "Methods cite ENV.md's environment versions; never re-type them.",
+            "Methods cite .rh/ENVIRONMENT.md versions; never re-type them.",
             "Every borrowed implementation is attributed via GAPS.md.",
             "Missing evidence is a hard stop — delete the claim, never soften it.",
         ],
@@ -228,8 +218,8 @@ def resolve(name: str) -> str | None:
 
 
 def names() -> list[str]:
-    """Artifact names in pipeline order: ENV.md first, then one per phase."""
-    order = ["ENV.md", "PROBLEM.md", "LITERATURE.md", "OUTPUT_LAYOUT.md", "GAPS.md",
+    """Artifact names in pipeline order: ENVIRONMENT.md first, then one per phase."""
+    order = ["ENVIRONMENT.md", "PROBLEM.md", "LITERATURE.md", "OUTPUT_LAYOUT.md", "GAPS.md",
              "PLAN.md", "STATUS.md", "MANUSCRIPT.md"]
     return [n for n in order if n in ARTIFACTS]
 

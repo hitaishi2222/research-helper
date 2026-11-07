@@ -8,10 +8,12 @@ Use --json on any command for machine-readable output.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
+from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table as RichTable
 from rich.text import Text
@@ -126,3 +128,96 @@ def banner(title: str, subtitle: str = "") -> str:
 
 def json_out(obj) -> None:
     print(json.dumps(obj, indent=2))
+
+
+# --- `rh init` wizard ---------------------------------------------------------
+
+def init_console() -> Console:
+    """A Console for the interactive questionnaire (owned by the caller)."""
+    return Console(highlight=False, emoji=False)
+
+
+def enable_tab_to_advance() -> bool:
+    """Make <tab> submit the current line, so it moves to the next question.
+
+    GNU readline and libedit take different bindings; pick by the library in
+    use. Best-effort: if neither is importable the default Tab behaviour stays.
+    The binding is process-wide and deliberately not restored — `rh init` exits
+    right after the questionnaire.
+    """
+    try:
+        if not (sys.stdin.isatty() and os.isatty(sys.stdin.fileno())):
+            return False
+        import readline
+    except Exception:
+        return False
+    try:
+        if "libedit" in (readline.__doc__ or ""):
+            readline.parse_and_bind("bind ^I ed-newline")
+        else:
+            readline.parse_and_bind(r'"\C-i": accept-line')
+    except Exception:
+        return False
+    return True
+
+
+class InitWizard:
+    """Compact in-place questionnaire: key hints once, then one question frame.
+
+    Nothing clears the full screen: the previous question frame is erased with a
+    cursor move and redrawn, so output above the wizard is left alone.
+    """
+
+    def __init__(self, console: Console):
+        self.console = console
+        self._frame_lines = 0
+
+    def header(self) -> None:
+        self.console.print(Text.assemble(
+            ("keys  ", "bold"),
+            ("enter", "bold cyan"), " keep · ",
+            ("tab", "bold cyan"), " next · ",
+            ("s", "bold cyan"), " skip · ",
+            ("q", "bold cyan"), " finish · ",
+            ("ctrl-c", "bold cyan"), " skip the rest",
+        ), markup=False)
+        self.console.print()
+
+    def extra_line(self) -> None:
+        """Account for a follow-up prompt printed below the frame (e.g. `other`)."""
+        self._frame_lines += 1
+
+    def question(self, *, step: int, total: int, title: str, help_text: str,
+                 options: list[tuple[str, str]] | None, default: str,
+                 answered: int, skipped: int) -> None:
+        self._erase()
+        progress = Text.assemble(
+            ("rh init ", "bold"), (f"{step}/{total}", "bold cyan"),
+            f" · {answered} answered · {skipped} skipped",
+        )
+        body = Text()
+        body.append(title, style="bold")
+        if help_text:
+            body.append("\n" + help_text, style="dim")
+        if options:
+            for i, (value, label) in enumerate(options, 1):
+                current = value == default and value is not None
+                body.append(f"\n{i}) {label}", style="bold cyan" if current else "cyan")
+                if current:
+                    body.append("  ← enter", style="dim")
+        else:
+            body.append(f"\nenter = keep {default!r}" if default else "\nenter = blank", style="dim")
+        frame = Group(progress, Panel(body, border_style="cyan", box=box.ROUNDED, padding=(0, 1)))
+        with self.console.capture() as cap:
+            self.console.print(frame)
+        self._frame_lines = cap.get().count("\n")
+        self.console.print(frame)
+
+    def _erase(self) -> None:
+        if not self.console.is_terminal or not self._frame_lines:
+            return
+        # the frame plus the one line the input prompt left below it
+        # shortcut: a single-line answer is assumed; a value long enough to wrap
+        # the prompt line would shift the redraw by its extra lines.
+        self.console.print(f"\x1b[{self._frame_lines + 1}A", end="", markup=False)
+        self.console.print("\x1b[J", end="", markup=False)

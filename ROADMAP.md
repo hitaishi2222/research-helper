@@ -25,31 +25,32 @@ discussion first.
 
 1. **No role info is hardcoded in `rh`.** Roles are `.rh/agents/<role>.md` files.
    `rh` only scaffolds an empty file on request; the Orchestrator fills it with
-   the user. The launch command per role lives in `.rh/ENV.md`
+   the user. The launch command per role lives in `.rh/env.json`
    (`agents.commands.<role>`), and `{agent_file}` puts the role file into the
    harness's system-prompt area. **The harness flag itself is never hardcoded**
    (`--system-prompt-file`, `--append-system-prompt-file`, `--system-file`, …):
-   the Orchestrator writes it in ENV.md for the harness in use. There is no
+   the Orchestrator writes it in env.json for the harness in use. There is no
    `if harness == "pi"` branch anywhere in `rh`.
-2. **Harness knowledge lives in `examples/envs/` only.** Per-harness ENV snippets
-   (`pi.sh`, `claude.sh`, `codex.sh`, …) are copy-paste starting points the user
-   edits. Python never learns a flag name.
+2. **Harness knowledge lives in data, never in Python.** `src/rh/harnesses.json`
+   supplies the `rh init` start template (the user picks one), and
+   `examples/envs/` carries the same snippets as copy-paste starting points the
+   user edits. Python never learns a flag name.
 3. **Placeholders are the only extension point.** New ways of passing a value to
    a harness (a list repeated as a flag, file contents inline, …) are new
    placeholders with a clear name, not special cases per harness.
-4. **Checks are against disk, never self-reported.** `rh checklist`, `rh doctor`,
-   and `rh gate check` read files and binaries and report what is actually there.
+4. **Checks are against disk, never self-reported.** `rh doctor` and
+   `rh gate check` read files and binaries and report what is actually there.
    An agent saying "done" is not evidence.
 5. **The Orchestrator does less, not more.** Every new command must remove a
    manual step the Orchestrator had to do by eye, or it does not ship.
 6. **`rh` never calls an LLM, never downloads, never installs.** It displays,
-   validates, mirrors, and opens what ENV.md names. Full stop.
+   validates, mirrors, and opens what env.json names. Full stop.
 
 ---
 
 ## v0.1 — CLI core ✅
 
-- [x] `.rh/` workspace, `.rh/ENV.md` as the single config source + `.rh/env.json` mirror
+- [x] `.rh/` workspace, `.rh/env.json` as the single config source
 - [x] `rh init`, `rh env show|set|list`, `rh describe`
 - [x] heading-structured artifacts: `add note|literature|layout|gaps|problem|plan|status|manuscript`
 - [x] task board: `add task`, `tasks`, `tasks set`, `plan import` (titles refresh)
@@ -76,7 +77,7 @@ discussion first.
 ## v0.3 — Orchestration
 
 The CLI now both prepares and opens the harness: `rh resume` runs the Orchestrator
-with the model/thinking/skills from ENV.md, and `rh spawn <role>` opens any other
+with the model/thinking/skills from env.json, and `rh spawn <role>` opens any other
 role agent with the command written there.
 
 - [x] `rh spawn <role>` — pane via `agents.spawn`, or a detached process with a log
@@ -88,7 +89,6 @@ role agent with the command written there.
 - [x] `rh spawn terminal <cmd>` — shell terminal in a new pane (`agents.shell`, `agents.split`)
 - [x] `.rh/agents/<role>.md` per-role files + `rh agents [ROLE] [--write]` (no role
   info hardcoded; `{agent_file}` wires the role file into the CLI system-prompt flag)
-- [x] `rh checklist` — live SKILL.md §0 + phase-exit checklist
 
 ## v0.4 — Make the Orchestrator do less
 
@@ -134,7 +134,7 @@ scaffolded by `rh agents --write`.
 - [ ] `rh agents new <role>` — create a custom role in one step: ask for the
   one-line purpose, scaffold `.rh/agents/<role>.md` with it, then record
   `agents.commands.<role>` (copy `agents.commands.default`, or ask for the
-  flags with the user) and `agents.roles.<role>.model` in `.rh/ENV.md`. Refuse
+  flags with the user) and `agents.roles.<role>.model` in `.rh/env.json`. Refuse
   to overwrite an existing role file without `--force` (archive first).
 - [ ] `rh agents edit <role>` — open the role file, and show which ENV keys
   belong to that role (command, model, thinking) so they are edited together.
@@ -142,12 +142,12 @@ scaffolded by `rh agents --write`.
   `agents.commands.<role>` / `agents.roles.<role>`, refusing while that role
   still owns open tasks.
 - [ ] `rh agents --write` scaffolds every role that has a command or a model in
-  ENV.md, not only the starter six (custom roles included).
+  env.json, not only the starter six (custom roles included).
 - [ ] `rh doctor` checks custom roles the same way as starter roles: file
   present, command splittable, `{agent_file}` + `{prompt}` wired, model set —
   and names any role that appears in one place but not the others.
 - [ ] `rh describe --json` lists each role with its file path, model and
-  command source, so an Orchestrator can see the roster without reading ENV.md.
+  command source, so an Orchestrator can see the roster without reading env.json.
 
 ## v0.5 — UX & retrieval
 
@@ -167,7 +167,7 @@ scaffolded by `rh agents --write`.
 - [ ] drop the hardcoded role/phase lists that still live in `tasks.PHASES`,
   `PHASE_EXIT`, `cli.REQUIRED_BEFORE`, `artifacts.ARTIFACTS`, and
   `config.ENV_SCHEMA` `agents.roles.*` entries — phases and roles become
-  data files (`.rh/phases.md`, `.rh/agents/`), validated the same way ENV.md is
+  data files (`.rh/phases.md`, `.rh/agents/`), validated the same way env.json is
 
 ---
 
@@ -178,7 +178,7 @@ scaffolded by `rh agents --write`.
 - A reference manager — it delegates to `zot`, `bibtex`, or the user.
 - Replacing the agent. The skill is instructions, not an agent runtime.
 - **A harness registry / adapter layer.** `rh` does not learn flag names per
-  harness. `examples/envs/` + ENV.md placeholders are the whole integration
+  harness. `examples/envs/` / `harnesses.json` + placeholders are the whole integration
   surface. If a harness needs a flag `rh` cannot express as a placeholder, the
   answer is a new placeholder, not a harness branch.
 - **Auto-probing the machine** ("which harness is installed, which shell, which

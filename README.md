@@ -56,9 +56,9 @@ nothing else to download.
 ## Quickstart
 
 ```bash
-rh init                          # in the project directory; asks a few questions (Enter keeps values, s=skip)
+rh init                          # in the project directory; rich wizard with detected options (Enter keep, Tab next, s skip, q finish)
 rh init --dry-run                # preview without writing anything, not even the prompt files
-rh init --force                  # archive a copy of ENV.md/tasks.json to .rh/.bak/ before writing
+rh init --force                  # archive a copy of env.json/tasks.json to .rh/.bak/ before writing
 rh init --clean                   # archive the whole .rh/ (event logs, notes) then recreate it
 rh env set agents.count=2 agents.backend=tmux agents.cli=pi \
   agents.skills=research-helper,crw literature.search=crw project.git=true
@@ -71,8 +71,9 @@ rh spawn researcher "implement S07 of PLAN.md"
 rh info PLAN.md             # what that file is for, its sections, its template
 ```
 
-The Orchestrator (your agent) interviews you for the environment and writes the
-`## Environment` section of `.rh/ENV.md`; `rh` never probes or auto-fills binaries.
+The Orchestrator (your agent) interviews you for the environment and writes
+`.rh/ENVIRONMENT.md`; `rh` never probes or auto-fills binaries. `rh init` also
+writes your role files and `.rh/CHECKLIST.md` — the Orchestrator's to-do list.
 A tool on `PATH` does not mean this project should use it.
 
 ---
@@ -81,8 +82,8 @@ A tool on `PATH` does not mean this project should use it.
 
 | Command | What it does |
 |---|---|
-| `rh init [--force] [--clean] [--dry-run]` | create the `.rh/` workspace **here**, non-destructively (archives before writing or removing); the project name is the directory, changeable with `rh env set project.name=` |
-| `rh env show` | print config as a table + environment notes, validate |
+| `rh init [--force] [--clean] [--dry-run]` | create the `.rh/` workspace **here** — `env.json`, `.rh/agents/*.md`, `.rh/CHECKLIST.md` — non-destructively (archives before writing or removing); the project name is the directory, changeable with `rh env set project.name=` |
+| `rh env show` | print config as a table + `.rh/ENVIRONMENT.md` notes, validate |
 | `rh env set KEY=VALUE ...` | set any key from the §2 schema (`rh env list`) |
 | `rh env list` | every settable key, type, choices, help |
 | `rh add note <heading> [-m BODY] [--file NAME]` | create/append a note file |
@@ -98,37 +99,37 @@ A tool on `PATH` does not mean this project should use it.
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
 | `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh plan import [--dry-run]` | mirror `PLAN.md` steps into `tasks.json` |
-| `rh resume` / `rh -r` | run the orchestrator **in this terminal** — model + thinking level from `agents.roles.orchestrator`, command from `agents.commands.orchestrator`, only `agents.skills` loaded |
-| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/ENV.md`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
+| `rh resume` / `rh -r` | run the orchestrator **in this terminal** — command from `agents.commands.orchestrator` (wiring `.rh/agents/orchestrator.md` in as the system prompt), only `agents.skills` loaded; opens with the skill read and does not echo the prompt |
+| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |
-| `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` scaffolds them |
-| `rh checklist` | live Orchestrator checklist (SKILL.md §0 rules + phase exit gates) |
+| `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` scaffolds a missing one |
 | `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
 | `rh describe [--json]` | the AI map: layout, phases, env keys, artifacts, spawn, budget |
 
 Global flags (before the subcommand): `--root DIR`, `--json`, `--version`.
+A wrong command or flag prints the full `--help`, nothing else (exit 2).
 Every command supports `--json` for agent reads — never parse the pretty UI.
 
 ---
 
 ## Launching agents (nothing hardcoded)
 
-`rh` does not know any agent CLI's flags. The commands live in `.rh/ENV.md`, and
+`rh` does not know any agent CLI's flags. The commands live in `.rh/env.json`, and
 `rh` substitutes placeholders into them:
 
 ```bash
 rh env set \
   'agents.roles.orchestrator={"provider":"pi","model":"glm-5","thinking":"high"}' \
-  'agents.commands.orchestrator=pi --model {model} --thinking {thinking} --skill {skills} --prompt-file {prompt_file}' \
+  'agents.commands.orchestrator=pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}' \
   'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
-rh resume            # → pi --model glm-5 --thinking high --skill research-helper …
+rh resume            # → pi --model glm-5 --thinking high --append-system-prompt .rh/agents/orchestrator.md "Load the `research-helper` skill now…"
 rh spawn researcher "read S07 and implement it"
 ```
 
 Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {name} {provider}
 {model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template that
-omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your ENV.md
+omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your env.json
 is not being honoured instead of guessing a flag. With no `agents.spawn` the agent
 is started as a detached process and its output goes to `.rh/logs/`.
 Ready-made scripts and per-role prompt templates live in [`examples/`](examples/README.md).
@@ -150,7 +151,7 @@ State lives in plain files, not a database:
 
 ```
 <project>/
-  .rh/                ENV.md, machine mirror, logs, notes, tasks, workflow
+  .rh/                env.json, ENVIRONMENT.md, CHECKLIST.md, agents/, logs, tasks
   src/                implementation
   results/            every number + the script that produced it
   papers/             downloaded PDFs (kept, never deleted by rh)
@@ -163,8 +164,9 @@ State lives in plain files, not a database:
   MANUSCRIPT.md       write-up
 ```
 
-`.rh/ENV.md` is the single config source; `.rh/env.json` mirrors it. `rh env set`
-rewrites the JSON block and preserves whatever the Orchestrator wrote below it.
+`.rh/env.json` is the single config file — `rh env set` writes it, `rh env show`
+reads it. `.rh/ENVIRONMENT.md` holds the phase-2 environment notes, and
+`.rh/CHECKLIST.md` is the Orchestrator's generated to-do list.
 
 ---
 
@@ -182,9 +184,9 @@ What the skill adds:
 
 - **Roles** — Orchestrator (always the current runner), Literature, Researcher,
   Reviewer, Critique, Writer, with a budget mapping for 1–4 parallel agents, and
-  `rh spawn <role>` to put one of them to work with the command from `ENV.md`.
+  `rh spawn <role>` to put one of them to work with the command from `env.json`.
 - **Gates** — user approves the plan, critique veto, "no result without a file".
-- **Templates** — `ENV.md`, `STATUS.md`, `OUTPUT_LAYOUT.md`, `PLAN.md` steps, logs —
+- **Templates** — `.rh/ENVIRONMENT.md`, `STATUS.md`, `OUTPUT_LAYOUT.md`, `PLAN.md` steps, logs —
   the same descriptions `rh info <FILE>` prints, so an agent can check before writing.
 - **Reading discipline** — one layout, a pattern tally, DOI anchors, no paraphrasing
   unread papers.

@@ -1,9 +1,11 @@
 """Config + storage model — maps SKILL.md §2 onto .rh/.
 
-ENV.md holds the config block (human-readable, SKILL.md truth). .rh/env.json
-mirrors it for machines. Anything below the config block (the Orchestrator's
-environment notes) is preserved verbatim across `rh env set`.
+`.rh/env.json` is the only config file (SKILL.md truth, read through `rh env`).
+The Orchestrator's free-form environment notes live beside it in
+`.rh/ENVIRONMENT.md` (phase 2) — a separate artifact, so config and prose never
+share one file.
 """
+
 from __future__ import annotations
 
 import copy
@@ -28,7 +30,7 @@ DEFAULT_ENV: dict = {
             "critique": {},
             "writer": {},
         },
-        # How an agent CLI is started — written by the user/Orchestrator in ENV.md.
+        # How an agent CLI is started — written by the user/Orchestrator in env.json.
         # `rh` never hardcodes a flag: it only substitutes placeholders.
         "commands": {
             "default": "",
@@ -61,43 +63,175 @@ PAYWALL_POLICIES = ("ask_user", "skip")
 # dotted key -> (type, choices, help) — drives `rh env set` and docs
 ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
     ("agents.count", "int", (1, 2, 3, 4), "how many agents may run at once, 1..4"),
-    ("agents.backend", "str", AGENT_BACKENDS, "tmux | herdr | tuios | none — how the Orchestrator spawns parallel agents (rh resume always runs inline)"),
-    ("agents.cli", "str", (), "agent binary the harness spawns, e.g. opencode (rh resume)"),
-    ("agents.skills", "list", (), "skills every spawned agent must read first, comma-separated"),
-    ("agents.commands.default", "str", (), "launch command used for any role without its own; placeholders {model} {thinking} {skills} {prompt} {agent_file} — written by the user/Orchestrator, never invented by rh"),
-    ("agents.commands.orchestrator", "str", (), "launch command `rh resume` execs (model + thinking level live here), e.g. pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file}"),
-    ("agents.spawn", "str", (), "how `rh spawn` opens a parallel agent (blank = detached process + .rh/logs/ log), e.g. tmux new-window -n rh-{agent} -c {root} {command}"),
-    ("agents.shell", "str", (), "user's shell for `rh spawn terminal` (blank = $SHELL, else sh), e.g. fish"),
-    ("agents.split", "str", AGENT_SPLITS, "pane layout for `rh spawn` pane mode: vertical | horizontal | window (new workspace/window)"),
-    ("agents.roles.orchestrator", "dict", (), "provider+model(+thinking), e.g. '{\"provider\":\"pi\",\"model\":\"glm-5\",\"thinking\":\"high\"}' or pi/glm-5"),
-    ("agents.roles.literature", "dict", (), "provider+model(+thinking) for the Literature role"),
-    ("agents.roles.researcher", "dict", (), "provider+model(+thinking) for the Researcher role"),
-    ("agents.roles.reviewer", "dict", (), "provider+model(+thinking) for the Reviewer role"),
-    ("agents.roles.critique", "dict", (), "provider+model(+thinking) for the Critique role"),
-    ("agents.roles.writer", "dict", (), "provider+model(+thinking) for the Writer role"),
-    ("agents.planners.models.0", "dict", (), "planner 1 model (must differ from planner 2)"),
+    (
+        "agents.backend",
+        "str",
+        AGENT_BACKENDS,
+        "tmux | herdr | tuios | none — how the Orchestrator spawns parallel agents (rh resume always runs inline)",
+    ),
+    (
+        "agents.cli",
+        "str",
+        (),
+        "agent binary the harness spawns, e.g. opencode (rh resume)",
+    ),
+    (
+        "agents.skills",
+        "list",
+        (),
+        "skills every spawned agent must read first, comma-separated",
+    ),
+    (
+        "agents.commands.default",
+        "str",
+        (),
+        "launch command used for any role without its own; placeholders {model} {thinking} {skills} {prompt} {agent_file} — written by the user/Orchestrator, never invented by rh",
+    ),
+    (
+        "agents.commands.orchestrator",
+        "str",
+        (),
+        "launch command `rh resume` execs (model + thinking level live here), e.g. pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt} — no `--skill` for the orchestrator, it needs every skill to assign them",
+    ),
+    (
+        "agents.spawn",
+        "str",
+        (),
+        "how `rh spawn` opens a parallel agent (blank = detached process + .rh/logs/ log), e.g. tmux new-window -n rh-{agent} -c {root} {command}",
+    ),
+    (
+        "agents.shell",
+        "str",
+        (),
+        "user's shell for `rh spawn terminal` (blank = $SHELL, else sh), e.g. fish",
+    ),
+    (
+        "agents.split",
+        "str",
+        AGENT_SPLITS,
+        "pane layout for `rh spawn` pane mode: vertical | horizontal | window (new workspace/window)",
+    ),
+    (
+        "agents.roles.orchestrator",
+        "dict",
+        (),
+        'provider+model(+thinking), e.g. \'{"provider":"pi","model":"glm-5","thinking":"high"}\' or pi/glm-5',
+    ),
+    (
+        "agents.roles.literature",
+        "dict",
+        (),
+        "provider+model(+thinking) for the Literature role",
+    ),
+    (
+        "agents.roles.researcher",
+        "dict",
+        (),
+        "provider+model(+thinking) for the Researcher role",
+    ),
+    (
+        "agents.roles.reviewer",
+        "dict",
+        (),
+        "provider+model(+thinking) for the Reviewer role",
+    ),
+    (
+        "agents.roles.critique",
+        "dict",
+        (),
+        "provider+model(+thinking) for the Critique role",
+    ),
+    (
+        "agents.roles.writer",
+        "dict",
+        (),
+        "provider+model(+thinking) for the Writer role",
+    ),
+    (
+        "agents.planners.models.0",
+        "dict",
+        (),
+        "planner 1 model (must differ from planner 2)",
+    ),
     ("agents.planners.models.1", "dict", (), "planner 2 model"),
-    ("agents.planners.max_rounds", "int", (0, 1, 2, 3, 5), "0 = cap at 3 rounds, then escalate"),
-    ("literature.ref_manager", "str", (), "reference manager the user names (e.g. zot, bibtex, none)"),
-    ("literature.reading", "str", (), "reader the user names (e.g. lit, pdftotext, images)"),
-    ("literature.paywall", "str", PAYWALL_POLICIES, "ask_user | skip (proceed without paper)"),
-    ("literature.search", "str", (), "search tool the user names (e.g. crw, agent-browser, any binary)"),
-    ("project.name", "str", (), "the project's name — a label in prompts and status (blank = not named yet)"),
-    ("project.git", "bool", (True, False), "true only if the project is already a repo"),
-    ("gates.user_approves_plan", "bool", (True, False), "user approves PLAN.md before implementation"),
-    ("gates.critique_veto", "bool", (True, False), "Critique can veto the critique gate"),
+    (
+        "agents.planners.max_rounds",
+        "int",
+        (0, 1, 2, 3, 5),
+        "0 = cap at 3 rounds, then escalate",
+    ),
+    (
+        "literature.ref_manager",
+        "str",
+        (),
+        "reference manager the user names (e.g. zot, bibtex, none)",
+    ),
+    (
+        "literature.reading",
+        "str",
+        (),
+        "reader the user names (e.g. lit, pdftotext, images)",
+    ),
+    (
+        "literature.paywall",
+        "str",
+        PAYWALL_POLICIES,
+        "ask_user | skip (proceed without paper)",
+    ),
+    (
+        "literature.search",
+        "str",
+        (),
+        "search tool the user names (e.g. crw, agent-browser, any binary)",
+    ),
+    (
+        "project.name",
+        "str",
+        (),
+        "the project's name — a label in prompts and status (blank = not named yet)",
+    ),
+    (
+        "project.git",
+        "bool",
+        (True, False),
+        "true only if the project is already a repo",
+    ),
+    (
+        "gates.user_approves_plan",
+        "bool",
+        (True, False),
+        "user approves PLAN.md before implementation",
+    ),
+    (
+        "gates.critique_veto",
+        "bool",
+        (True, False),
+        "Critique can veto the critique gate",
+    ),
 ]
 
 # Keys `rh env set` accepts beyond the static table above (any role name works,
 # so `agents.commands.<whoever>` and `agents.roles.<whoever>.model` are settable
 # without rh knowing the role ahead of time).
 ENV_PATTERNS: list[tuple[re.Pattern, str, str, str]] = [
-    (re.compile(r"^agents\.commands\.[a-z0-9_-]+$"), "str", "agents.commands.<role>",
-     "launch command for that role (placeholders {model} {thinking} {skills} {prompt})"),
-    (re.compile(r"^agents\.roles\.[a-z0-9_-]+\.(provider|model|thinking)$"), "str",
-     "agents.roles.<role>.provider|model|thinking", "one field of a role's model"),
-    (re.compile(r"^agents\.roles\.[a-z0-9_-]+$"), "dict", "agents.roles.<role>",
-     "provider+model(+thinking) for a role, e.g. pi/glm-5 or a JSON object"),
+    (
+        re.compile(r"^agents\.commands\.[a-z0-9_-]+$"),
+        "str",
+        "agents.commands.<role>",
+        "launch command for that role (placeholders {model} {thinking} {skills} {prompt})",
+    ),
+    (
+        re.compile(r"^agents\.roles\.[a-z0-9_-]+\.(provider|model|thinking)$"),
+        "str",
+        "agents.roles.<role>.provider|model|thinking",
+        "one field of a role's model",
+    ),
+    (
+        re.compile(r"^agents\.roles\.[a-z0-9_-]+$"),
+        "dict",
+        "agents.roles.<role>",
+        "provider+model(+thinking) for a role, e.g. pi/glm-5 or a JSON object",
+    ),
 ]
 
 
@@ -120,7 +254,6 @@ def schema_for(key: str) -> tuple[str, str, tuple, str] | None:
         if pattern.match(key):
             return (key, kind, (), help_text)
     return None
-
 
 
 class ConfigError(RuntimeError):
@@ -217,9 +350,16 @@ def validate(env: dict) -> list[str]:
         problems.append("agents.count is missing")
     backend = env.get("agents", {}).get("backend")
     if backend not in AGENT_BACKENDS:
-        problems.append(f"agents.backend must be one of {AGENT_BACKENDS}, got {backend!r}")
+        problems.append(
+            f"agents.backend must be one of {AGENT_BACKENDS}, got {backend!r}"
+        )
     planners = env.get("agents", {}).get("planners", {}).get("models", [])
-    if len(planners) >= 2 and planners[0] and planners[1] and planners[0] == planners[1]:
+    if (
+        len(planners) >= 2
+        and planners[0]
+        and planners[1]
+        and planners[0] == planners[1]
+    ):
         problems.append("agents.planners.models must be two different models")
     name = env.get("project", {}).get("name", "")
     if name is not None and not isinstance(name, str):
@@ -231,25 +371,38 @@ def validate(env: dict) -> list[str]:
     for key in ("ref_manager", "reading", "search"):
         val = lit.get(key)
         if not isinstance(val, str) or not val.strip():
-            problems.append(f"literature.{key} must be a non-empty tool/method name, got {val!r}")
+            problems.append(
+                f"literature.{key} must be a non-empty tool/method name, got {val!r}"
+            )
     paywall = lit.get("paywall")
     if paywall not in PAYWALL_POLICIES:
-        problems.append(f"literature.paywall must be one of {PAYWALL_POLICIES}, got {paywall!r}")
+        problems.append(
+            f"literature.paywall must be one of {PAYWALL_POLICIES}, got {paywall!r}"
+        )
     orch = env.get("agents", {}).get("roles", {}).get("orchestrator", {})
     if orch and (not isinstance(orch, dict) or not orch):
         problems.append("agents.roles.orchestrator must be a model object")
     skills = env.get("agents", {}).get("skills")
-    if not isinstance(skills, list) or not all(isinstance(s, str) and s.strip() for s in skills):
-        problems.append("agents.skills must be a list of skill names, e.g. [\"research-helper\"]")
+    if not isinstance(skills, list) or not all(
+        isinstance(s, str) and s.strip() for s in skills
+    ):
+        problems.append(
+            'agents.skills must be a list of skill names, e.g. ["research-helper"]'
+        )
     agents = env.get("agents", {}) or {}
     commands = agents.get("commands")
     if commands is not None and not isinstance(commands, dict):
-        problems.append("agents.commands must be an object of role -> launch command string")
+        problems.append(
+            "agents.commands must be an object of role -> launch command string"
+        )
     elif isinstance(commands, dict):
         import shlex
+
         for name, template in commands.items():
             if not isinstance(template, str):
-                problems.append(f"agents.commands.{name} must be a string command template")
+                problems.append(
+                    f"agents.commands.{name} must be a string command template"
+                )
             elif not template.strip():
                 continue
             else:
@@ -257,11 +410,16 @@ def validate(env: dict) -> list[str]:
                 try:
                     shlex.split(template)
                 except ValueError as exc:
-                    problems.append(f"agents.commands.{name} is not shell-splittable: {exc}")
-                if "{agent_file}" not in template and "{agent_file_contents}" not in template:
+                    problems.append(
+                        f"agents.commands.{name} is not shell-splittable: {exc}"
+                    )
+                if (
+                    "{agent_file}" not in template
+                    and "{agent_file_contents}" not in template
+                ):
                     problems.append(
                         f"agents.commands.{name} missing {{agent_file}} — role file not wired into the harness system prompt "
-                        "(write it in ENV.md for the harness in use; see examples/envs/*.sh)"
+                        "(write it in .rh/env.json for the harness in use; see examples/envs/*.sh)"
                     )
                 if "{prompt}" not in template and "{prompt_file}" not in template:
                     problems.append(
@@ -269,80 +427,81 @@ def validate(env: dict) -> list[str]:
                     )
     spawn_template = agents.get("spawn")
     if spawn_template is not None and not isinstance(spawn_template, str):
-        problems.append("agents.spawn must be a string command template (blank = background process)")
+        problems.append(
+            "agents.spawn must be a string command template (blank = background process)"
+        )
     shell = agents.get("shell")
     if shell is not None and not isinstance(shell, str):
         problems.append("agents.shell must be a string shell name or path")
     split = agents.get("split")
     if split not in ("",) + AGENT_SPLITS:
-        problems.append(f"agents.split must be one of {AGENT_SPLITS} or blank, got {split!r}")
+        problems.append(
+            f"agents.split must be one of {AGENT_SPLITS} or blank, got {split!r}"
+        )
     return problems
 
 
-# --- ENV.md rendering/parsing -------------------------------------------------
+# --- env.json (config) + ENVIRONMENT.md (notes) --------------------------------
 
 ENV_FENCE = re.compile(r"```jsonc?\n(.*?)```", re.DOTALL)
 
 
-def render_env_md(env: dict, tail: str = "") -> str:
-    """Render ENV.md: config block (json) + whatever the Orchestrator wrote below it."""
-    block = json.dumps(env, indent=2, sort_keys=True)
-    lines = [
-        "# ENV — research-helper config",
-        "",
-        "```json",
-        block,
-        "```",
-    ]
-    if tail.strip():
-        lines += ["", tail.strip()]
-    return "\n".join(lines) + "\n"
-
-
-def _block_and_tail(path: Path) -> tuple[dict | None, str]:
-    """Return (config block, text below it) from ENV.md."""
-    if not path.exists():
-        return None, ""
-    text = path.read_text(encoding="utf-8")
-    m = ENV_FENCE.search(text)
-    if not m:
-        return None, ""
+def environment_notes(root: Path) -> str:
+    """The Orchestrator's phase-2 environment notes (`.rh/ENVIRONMENT.md`)."""
     try:
-        env = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return None, ""
-    return env, text[m.end():].strip("\n")
+        return paths.environment_md(root).read_text(encoding="utf-8").strip("\n")
+    except OSError:
+        return ""
 
 
-def parse_env_md(path: Path) -> dict | None:
-    """Extract the json config block from ENV.md. Returns None if absent."""
-    return _block_and_tail(path)[0]
+def _legacy_env_md(root: Path) -> Path | None:
+    """A pre-0.2 ENV.md to fold into env.json + ENVIRONMENT.md, if any."""
+    if not paths.rh_dir(root).is_dir():
+        return None
+    for cand in (paths.rh_dir(root) / "ENV.md", root / "ENV.md"):
+        if cand.is_file():
+            return cand
+    return None
 
 
-def load_tail(root: Path) -> str:
-    """The Orchestrator's environment notes below the config block."""
-    return _block_and_tail(ensure_env_location(root))[1]
+def migrate_legacy_env_md(root: Path) -> Path | None:
+    """Move an old ENV.md into env.json + ENVIRONMENT.md, archiving the markdown.
 
-
-def ensure_env_location(root: Path) -> Path:
-    """ENV.md lives in .rh/. Migrate a ROOT ENV.md (or a symlink to it) once."""
-    target = paths.env_md(root)
-    if target.is_symlink():
-        content = target.read_text(encoding="utf-8")
-        target.unlink()
-        target.write_text(content, encoding="utf-8")
-    elif not target.exists():
-        legacy = root / "ENV.md"
-        if legacy.exists() and paths.rh_dir(root).exists():
-            legacy.replace(target)
-    return target
+    The copy to `.rh/.bak/<timestamp>/` happens before the removal, so the
+    user's notes are never lost. Returns the archive path (None when clean).
+    """
+    legacy = _legacy_env_md(root)
+    if legacy is None:
+        return None
+    text = legacy.read_text(encoding="utf-8")
+    m = ENV_FENCE.search(text)
+    block = None
+    if m:
+        try:
+            block = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            block = None
+    if isinstance(block, dict) and not paths.env_json(root).exists():
+        config_file = paths.env_json(root)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            json.dumps(block, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    tail = text[m.end() :].strip() if m else ""
+    notes = paths.environment_md(root)
+    if tail and not notes.exists():
+        notes.parent.mkdir(parents=True, exist_ok=True)
+        notes.write_text(tail + "\n", encoding="utf-8")
+    archived = paths.backup_file(root, legacy)
+    legacy.unlink()
+    return archived
 
 
 def _migrate(env: dict) -> dict:
     """Read the old `project.slug` key as `project.name` (renamed in 0.2).
 
     In memory only: the next `rh env set` writes the new key and the old one
-    disappears from ENV.md.
+    disappears on the next write.
     """
     project = env.get("project")
     if isinstance(project, dict) and "slug" in project:
@@ -353,48 +512,91 @@ def _migrate(env: dict) -> dict:
 
 
 def load_env(root: Path) -> dict:
-    """Load effective config: .rh/ENV.md block (truth) or .rh/env.json mirror or defaults."""
-    env_md = ensure_env_location(root)
-    if env_md.exists():
-        parsed = parse_env_md(env_md)
-        if parsed is not None:
-            return _migrate(deep_merge(DEFAULT_ENV, parsed))
-    mirror = paths.env_json(root)
-    if mirror.exists():
+    """Load effective config from `.rh/env.json`, else the defaults."""
+    migrate_legacy_env_md(root)
+    config_file = paths.env_json(root)
+    if config_file.exists():
         try:
-            return _migrate(deep_merge(DEFAULT_ENV, json.loads(mirror.read_text())))
-        except json.JSONDecodeError:
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return _migrate(deep_merge(DEFAULT_ENV, data))
+        except (OSError, json.JSONDecodeError):
             pass
     return deep_merge(DEFAULT_ENV, {})
 
 
 def save_env(root: Path, env: dict) -> None:
-    """Write .rh/ENV.md config block (preserving the notes below it) + .rh/env.json mirror."""
-    env_path = ensure_env_location(root)
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    _, tail = _block_and_tail(env_path)
-    env_path.write_text(render_env_md(env, tail), encoding="utf-8")
-    mirror = paths.env_json(root)
-    mirror.parent.mkdir(parents=True, exist_ok=True)
-    mirror.write_text(json.dumps(env, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    """Write `.rh/env.json` — the single config file (`rh env set` is the interface)."""
+    config_file = paths.env_json(root)
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        json.dumps(env, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def harness_names() -> list[str]:
+    """Harnesses `rh init` can offer a start template for (data, not code)."""
+    return sorted(load_harnesses())
+
+
+def load_harnesses() -> dict:
+    from importlib import resources
+
+    try:
+        raw = (
+            resources.files("rh").joinpath("harnesses.json").read_text(encoding="utf-8")
+        )
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def apply_harness(env: dict, name: str) -> bool:
+    """Fill the launch command the user chose at `rh init` (only where still blank).
+
+    The flags live in `harnesses.json` (data), never in Python: `rh` still hardcodes
+    no agent flag. Returns True when a template was known and applied.
+    """
+    spec = load_harnesses().get((name or "").strip().lower())
+    if not isinstance(spec, dict):
+        return False
+    agents = env.get("agents")
+    if not isinstance(agents, dict):
+        agents = env["agents"] = {}
+    if not agents.get("cli"):
+        agents["cli"] = spec.get("cli", "")
+    commands = agents.get("commands")
+    if not isinstance(commands, dict):
+        commands = agents["commands"] = {}
+    for role, template in (spec.get("commands") or {}).items():
+        if not str(commands.get(role) or "").strip():
+            commands[role] = template
+    return True
 
 
 def config_complete(env: dict) -> bool:
     """Phase-0 exit gate (SKILL.md §3): the block parses and no validate() problems.
 
-    Never use this alone — defaults pass validation with no ENV.md on disk.
+    Never use this alone — defaults pass validation with no env.json on disk.
     Gate on config_written() for "did the user actually configure the project".
     """
     return not validate(env)
 
 
 def config_written(root: Path) -> bool:
-    """True only if .rh/ENV.md exists and holds a parseable config block.
+    """True only if `.rh/env.json` exists and holds a JSON object.
 
-    This is the phase-0 exit gate: the block was written (rh env set / init),
+    This is the phase-0 exit gate: the file was written (rh env set / init),
     so it is user-confirmed config, not silent defaults.
     """
-    return parse_env_md(paths.env_md(root)) is not None
+    config_file = paths.env_json(root)
+    if not config_file.is_file():
+        return False
+    try:
+        return isinstance(json.loads(config_file.read_text(encoding="utf-8")), dict)
+    except (OSError, json.JSONDecodeError):
+        return False
 
 
 def phase_gate(root: Path, env: dict | None = None) -> dict:
@@ -406,12 +608,14 @@ def phase_gate(root: Path, env: dict | None = None) -> dict:
     """
     env = env if env is not None else load_env(root)
     problems: list[str] = []
-    current = TaskStore(root).current_phase() if (paths.tasks_json(root)).exists() else 0
+    current = (
+        TaskStore(root).current_phase() if (paths.tasks_json(root)).exists() else 0
+    )
 
     written = config_written(root)
     if not written:
         problems.append(
-            "phase 0 CONFIG unfinished — no ENV.md with a parseable config block "
+            "phase 0 CONFIG unfinished — no .rh/env.json with a parseable config object "
             "(run `rh env set KEY=VALUE ...`, then have the user confirm)"
         )
     elif not config_complete(env):
@@ -423,19 +627,27 @@ def phase_gate(root: Path, env: dict | None = None) -> dict:
     done[1] = problem.exists() and problem.stat().st_size > 0
     if current >= 6 and not done[1]:
         problems.append("phase 1 INTAKE artifact missing: PROBLEM.md")
-    done[2] = bool(load_tail(root).strip())
+    done[2] = bool(environment_notes(root))
     if current >= 6 and not done[2]:
-        problems.append("phase 2 ENVIRONMENT artifact missing: have the Orchestrator "
-                        "interview the user and write the environment section in ENV.md")
+        problems.append(
+            "phase 2 ENVIRONMENT artifact missing: have the Orchestrator "
+            "interview the user and write .rh/ENVIRONMENT.md"
+        )
     lit = paths.artifact_path(root, "LITERATURE.md")
     gaps = paths.artifact_path(root, "GAPS.md")
-    done[3] = (lit.exists() and lit.stat().st_size > 0) or (gaps.exists() and gaps.stat().st_size > 0)
+    done[3] = (lit.exists() and lit.stat().st_size > 0) or (
+        gaps.exists() and gaps.stat().st_size > 0
+    )
     if current >= 6 and not done[3]:
-        problems.append("phase 3 LITERATURE artifact missing: LITERATURE.md or GAPS.md (or user-agreed skip)")
+        problems.append(
+            "phase 3 LITERATURE artifact missing: LITERATURE.md or GAPS.md (or user-agreed skip)"
+        )
     plan = paths.artifact_path(root, "PLAN.md")
     done[4] = plan.exists() and plan.stat().st_size > 0
     if current >= 6 and not done[4]:
-        problems.append("phase 4 PLAN artifact missing: PLAN.md (two planners + user approval)")
+        problems.append(
+            "phase 4 PLAN artifact missing: PLAN.md (two planners + user approval)"
+        )
     status = paths.artifact_path(root, "STATUS.md")
     done[5] = status.exists() and status.stat().st_size > 0
     if current >= 6 and not done[5]:

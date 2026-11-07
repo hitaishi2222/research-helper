@@ -2,7 +2,7 @@
 
 **Question to answer:** {{QUESTION}}
 **Papers land in:** `papers/` · **takes in:** `LITERATURE.md`
-**Search tool:** as written in `.rh/ENV.md` (`literature.search`)
+**Search tool:** as written in `.rh/env.json` (`literature.search`)
 **Output type the user asked for:** {{OUTPUT}}
 
 Do this, in order:

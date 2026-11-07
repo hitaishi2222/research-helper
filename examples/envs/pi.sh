@@ -1,7 +1,7 @@
 #!/bin/sh
 # pi — copy-paste ENV snippet. NOT executed by rh; the Orchestrator edits it
-# with the user. The pi-specific flags live ONLY here and in .rh/ENV.md —
-# rh never hardcodes them (see ROADMAP principle 1).
+# with the user. The pi-specific flags live ONLY here, in .rh/env.json, and in
+# src/rh/harnesses.json (the init start template) — rh never hardcodes them.
 set -eu
 MODEL="${RH_MODEL:-<model>}"
 THINKING="${RH_THINKING:-high}"
@@ -13,7 +13,7 @@ rh env set \
   agents.shell=sh \
   agents.split=vertical \
   "agents.roles.orchestrator={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"$THINKING\"}" \
-  "agents.commands.orchestrator=pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
-  "agents.commands.default=pi --model {model} --thinking {thinking} --skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
+  "agents.commands.orchestrator=pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}" \
+  "agents.commands.default=pi --model {model} --thinking {thinking} --skill {skills} --append-system-prompt {agent_file} {prompt}" \
   'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
 rh doctor

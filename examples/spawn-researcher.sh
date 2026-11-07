@@ -4,7 +4,7 @@
 # Fill the <angle-bracket> values, then run it from the project root. The script
 # renders examples/prompts/researcher.md, then lets `rh spawn` append the role
 # contract (owned artifacts, board tasks, model, skills) and open the agent with
-# the command written in .rh/ENV.md.
+# the command written in .rh/env.json.
 set -eu
 
 ROOT="${RH_ROOT:-$(pwd)}"
@@ -14,8 +14,8 @@ DELIVERABLE="<results/S07.csv>"     # where the evidence lands
 VERIFY='<verify command from PLAN.md>'
 
 echo "project: $ROOT"
-if [ ! -f "$ROOT/.rh/ENV.md" ]; then
-  echo "✗ no .rh/ENV.md in $ROOT — verify the path before opening an agent" >&2
+if [ ! -f "$ROOT/.rh/env.json" ]; then
+  echo "✗ no .rh/env.json in $ROOT — verify the path before opening an agent" >&2
   exit 1
 fi
 

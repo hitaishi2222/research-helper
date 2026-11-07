@@ -1,8 +1,9 @@
 """Per-role agent files — `.rh/agents/<role>.md`.
 
 There is no hardcoded role info anywhere in `rh`. Each role's rules and scope
-live only in its `.rh/agents/<role>.md` file. `rh` never invents role content
-beyond a minimal scaffold when the Orchestrator asks it to `--write`.
+live only in its `.rh/agents/<role>.md` file. `rh` never invents role scope beyond
+a starter file: the orchestrator starter carries the SKILL.md §5 contract (it is
+the head of the project), the other roles get a minimal scaffold to fill in.
 
 How a role file reaches the agent:
 
@@ -13,33 +14,40 @@ How a role file reaches the agent:
    template wires it into the CLI's system-prompt area with `{agent_file}`,
    e.g.::
 
-       agents.commands.researcher = pi --model {model} --system-prompt-file {agent_file} --prompt-file {prompt_file}
+       agents.commands.researcher = pi --model {model} --append-system-prompt {agent_file} {prompt}
 
    or the harness's equivalent (`--append-system-prompt-file`, `--system`,
    `--agent`…). `rh` does not know which flag the harness accepts — the
-   Orchestrator writes it in `.rh/ENV.md`, per the harness docs.
+   Orchestrator writes it in `.rh/env.json`, per the harness docs.
 3. If a template omits `{agent_file}`, `launch_plan()` warns that the role
    file is not wired into the system prompt.
 
-`rh agents --write` creates the scaffold for every role the Orchestrator
-names; `rh agents <role> --write` creates one. The Orchestrator then edits
-the file with user approval. Canonical starter roles (written by hand, not
-by rh, to `.rh/agents/`):
+`rh init` writes the starter roles below; `rh agents <role> --write` creates one
+later, and `rh agents --write` fills in any that are missing. The Orchestrator
+then edits the file with user approval. Starter roles:
 
     orchestrator, literature, researcher, reviewer, critique, writer
 
 File location: `<root>/.rh/agents/<role>.md` (lowercase). Uppercase names
 (`RESEARCHER.md`) are accepted on read for harness conventions.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from . import paths
 
-# Starter roles the Orchestrator may ask rh to scaffold. This is a scaffold
-# list only — no role rules, scope, or contracts live here.
-STARTER_ROLES = ("orchestrator", "literature", "researcher", "reviewer", "critique", "writer")
+# Starter roles `rh init` writes. Only the orchestrator starter carries a
+# contract (SKILL.md §5); the rest are scaffolds the Orchestrator fills in.
+STARTER_ROLES = (
+    "orchestrator",
+    "literature",
+    "researcher",
+    "reviewer",
+    "critique",
+    "writer",
+)
 
 
 def agents_dir(root: Path) -> Path:
@@ -56,15 +64,44 @@ def _resolve_existing(root: Path, role: str) -> Path | None:
     if not role:
         return None
     d = agents_dir(root)
-    for cand in (d / f"{role}.md", d / f"{role.upper()}.md", d / f"{role.capitalize()}.md"):
+    for cand in (
+        d / f"{role}.md",
+        d / f"{role.upper()}.md",
+        d / f"{role.capitalize()}.md",
+    ):
         if cand.exists():
             return cand
     return None
 
 
+ORCHESTRATOR_CONTENT = """# ORCHESTRATOR agent
+
+Role: the head of this project — routing, gates, every question to the user, and the singular owner of STATUS.md.
+Owns: routing, `.rh/STATUS.md`, merged `.rh/PLAN.md`, the roster, all user questions.
+May: delegate (`rh spawn <role>`), enforce gates (`rh phase`), escalate, edit artifacts.
+May not: implement or fix code, approve its own plan, pick models (they live in `.rh/env.json`).
+
+Rules carried into every session:
+- load the research-helper skill first; SKILL.md §0 and §5 are your contract;
+- your checklist is `.rh/CHECKLIST.md` — read it first, then work it top to bottom:
+  fill missing environment values by asking the user, wire the launch commands,
+  and author `.rh/workflow.mmd` once the plan is approved;
+- ask before every state-changing action; a waiver is recorded in STATUS.md by rule number;
+- update STATUS.md yourself after every step, before every question (rule 9);
+- verify the project path before opening an agent (rule 12) and close it after (rule 13);
+- report back with files changed, evidence (command + number), and needs.
+
+The launch command for this role lives in `.rh/env.json` as
+agents.commands.orchestrator; `rh resume` uses exactly that command and
+wires this file into the harness's system-prompt area with {agent_file}.
+"""
+
+
 def default_content(role: str) -> str:
-    """Minimal scaffold for a role file. The Orchestrator fills it in with the user."""
+    """Starter content for a role file. The Orchestrator fills the rest in with the user."""
     role = (role or "").strip().lower()
+    if role == "orchestrator":
+        return ORCHESTRATOR_CONTENT
     return f"""# {role.upper()} agent
 
 Role: <what this agent is for — one sentence>
@@ -80,10 +117,11 @@ Rules carried into every session:
 - never update STATUS.md unless you are the Orchestrator.
 
 Edit this file with user approval. The launch command for this role
-lives in .rh/ENV.md as agents.commands.<role>; `rh spawn <role>`
+lives in .rh/env.json as agents.commands.<role>; `rh spawn <role>`
 uses exactly that command. Wire this file into the harness's
-system-prompt flag in that command with {{agent_file}}, e.g.
-`--system-prompt-file {{agent_file}}` (or the harness equivalent).
+system-prompt area in that command with {{agent_file}}, e.g.
+`--append-system-prompt {{agent_file}}` (never a replacing flag), and pass the
+prompt positionally with {{prompt}} (or the harness equivalent).
 """
 
 

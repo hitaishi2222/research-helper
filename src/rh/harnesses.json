@@ -1,0 +1,23 @@
+{
+  "pi": {
+    "cli": "pi",
+    "commands": {
+      "orchestrator": "pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}",
+      "default": "pi --model {model} --thinking {thinking} --skill {skills} --append-system-prompt {agent_file} {prompt}"
+    }
+  },
+  "claude": {
+    "cli": "claude",
+    "commands": {
+      "orchestrator": "claude --model {model} --append-system-prompt-file {agent_file} --prompt-file {prompt_file}",
+      "default": "claude --model {model} --append-system-prompt-file {agent_file} --prompt-file {prompt_file}"
+    }
+  },
+  "codex": {
+    "cli": "codex",
+    "commands": {
+      "orchestrator": "codex --model {model} --system-prompt-file {agent_file} --prompt-file {prompt_file}",
+      "default": "codex --model {model} --system-prompt-file {agent_file} --prompt-file {prompt_file}"
+    }
+  }
+}

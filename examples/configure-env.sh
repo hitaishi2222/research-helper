@@ -1,5 +1,5 @@
 #!/bin/sh
-# configure-env.sh — put the agent launch commands into .rh/ENV.md (once per project).
+# configure-env.sh — put the agent launch commands into .rh/env.json (once per project).
 #
 # These values are EXAMPLES shaped for a `pi`-style CLI and tmux. Replace the
 # binary and every flag with the ones your harness actually accepts: `rh` only
@@ -17,10 +17,10 @@ rh env set \
   "agents.roles.orchestrator={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"$THINKING\"}" \
   "agents.roles.researcher={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"medium\"}" \
   "agents.roles.critique={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"medium\"}" \
-  "agents.commands.orchestrator=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
-  "agents.commands.researcher=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
-  "agents.commands.critique=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
-  "agents.commands.default=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}" \
+  "agents.commands.orchestrator=pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}" \
+  "agents.commands.researcher=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --append-system-prompt {agent_file} {prompt}" \
+  "agents.commands.critique=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --append-system-prompt {agent_file} {prompt}" \
+  "agents.commands.default=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --append-system-prompt {agent_file} {prompt}" \
   'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
 
 # The same selection drives `rh resume`: model + thinking level from

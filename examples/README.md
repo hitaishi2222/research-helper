@@ -3,7 +3,7 @@
 These are **starting points for agents, not code `rh` runs**. They show the two
 halves of delegation:
 
-1. **The command** — what binary/flags start an agent. It lives in `.rh/ENV.md`
+1. **The command** — what binary/flags start an agent. It lives in `.rh/env.json`
    (`agents.commands.<role>`, `agents.spawn`), written by the user or the
    Orchestrator. `rh` never hardcodes a flag: it substitutes placeholders into
    whatever you wrote there.
@@ -17,7 +17,7 @@ Two different placeholder styles, deliberately different so they never collide:
 
 | Where | Style | Who fills it |
 |---|---|---|
-| `agents.commands.<role>`, `agents.spawn` (`.rh/ENV.md`) | `{model}` `{thinking}` `{skills}` `{prompt}` `{prompt_file}` `{root}` `{name}` `{role}` `{command}` | `rh` (from the config block) |
+| `agents.commands.<role>`, `agents.spawn` (`.rh/env.json`) | `{model}` `{thinking}` `{skills}` `{prompt}` `{prompt_file}` `{root}` `{name}` `{role}` `{command}` | `rh` (from the config block) |
 | These example scripts / prompt templates | `{{STEP}}` `{{TASK}}` `{{DELIVERABLE}}` `{{VERIFY}}` | you, the agent, with `sed`/`envsubst` before calling `rh spawn` |
 
 `${HOME}`-style shell variables survive untouched; only `{lowercase}` braces are
@@ -27,7 +27,7 @@ substituted by `rh`.
 
 | File | What it shows |
 |---|---|
-| `configure-env.sh` | writing the launch commands and the pane command into `.rh/ENV.md` once |
+| `configure-env.sh` | writing the launch commands and the pane command into `.rh/env.json` once |
 | `spawn-researcher.sh` | handing one `PLAN.md` step to a fresh Researcher agent |
 | `spawn-critique.sh` | opening Critique with the artifacts to attack |
 | `prompts/orchestrator.md` | the session prompt for `rh resume` (`rh` adds project state around it) |
@@ -36,7 +36,7 @@ substituted by `rh`.
 ## The loop these scripts belong to
 
 ```bash
-# 1. once per project: put the commands in ENV.md
+# 1. once per project: put the commands in env.json
 ./examples/configure-env.sh
 
 # 2. what would run? (never guess, always look)

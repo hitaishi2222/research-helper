@@ -98,7 +98,6 @@ A tool on `PATH` does not mean this project should use it.
 | `rh status` | header, phase rail, per-phase progress |
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
 | `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
-| `rh plan import [--dry-run]` | mirror `PLAN.md` steps into `tasks.json` |
 | `rh resume` / `rh -r` | run the orchestrator **in this terminal** — command from `agents.commands.orchestrator` (wiring `.rh/agents/orchestrator.md` in as the system prompt), only `agents.skills` loaded; opens with the skill read and does not echo the prompt |
 | `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |

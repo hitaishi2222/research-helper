@@ -157,21 +157,18 @@ ARTIFACTS: dict[str, dict] = {
         "rules": [
             "Two planners on different models agree, then the user approves (gates.user_approves_plan).",
             "Every step needs a verification command or check — \"looks right\" is not one.",
-            "Replanning edits this file first, then `rh plan import` refreshes the board.",
-            "`rh plan import` treats this file as truth: a retired title does not survive on the board.",
-            "Shapes accepted, first one found wins: a heading with an id (`## S07 — x`) · any "
-            "level>=3 heading · a numbered heading (`## 1. x`) when no level>=3 exists · a "
-            "numbered line (`1. x`) · a bullet at column 0 (`- x`). A heading that is not a step "
-            "is a section boundary.",
-            "Bullets inside a step are its subtasks; re-import appends new ones and never deletes "
-            "or resets one. Task state is never touched by an import.",
-            "Who keeps the board in sync: an agent that writes this file imports its own steps; a "
-            "user-written plan is imported by the Orchestrator.",
+            "The board is created **explicitly**: whoever owns this file turns each step into a task "
+            "with `rh add task \"<title>\" --id S0N --deliverable … --verify … --subtask …` — there is no "
+            "parser, because the plan is prose and the board must not guess.",
+            "Shape is free: the file is read by people and agents, not parsed. Write it as prose, "
+            "a numbered list or headings — nothing is lost by not matching a template.",
+            "Who keeps the board in sync: the agent that writes this file creates its own tasks; a "
+            "user-written plan has its tasks created by the Orchestrator.",
             "No planner configured (`rh env set agents.planners.models=none`) means the user is "
             "the planner: the phase-4 gate reads user-authored + user approval, `rh doctor` and "
             "`rh env show` say so, and no planner pane is ever opened.",
         ],
-        "consumers": "tasks.json (`rh plan import`), STATUS.md, MANUSCRIPT.md",
+        "consumers": "tasks.json (created with `rh add task`), STATUS.md, MANUSCRIPT.md",
     },
     "STATUS.md": {
         "purpose": "The truth about where the project is: current phase and step, the agent "

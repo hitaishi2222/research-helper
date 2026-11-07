@@ -82,7 +82,8 @@ Inside the project root:
 Artifacts are created on first write, in the phase that first needs them. If a phase is
 skipped with the user's agreement, its artifact simply never exists — that is allowed;
 an empty file is not. **Pre-existing `PLAN.md` is adopted, never overwritten:**
-read it, ask the user (adopt / diff / skip), and mirror it with `rh plan import`.
+read it, ask the user (adopt / diff / skip), and turn its steps into board tasks with
+`rh add task` — there is no parser; the plan is prose and the board must not guess.
 A forced write first archives the old file to `.rh/.bak/<timestamp>/`.
 
 Before writing any artifact, run `rh info <FILE.md>`: it prints that file's purpose, owner,
@@ -216,7 +217,7 @@ keeps a configured project as it is; Tab submits and moves on; `s` really skips
 overwrites existing files without archiving them first (`.rh/.bak/`): `--force`
 archives a copy, `--clean` archives the whole `.rh/` (event logs, notes) before
 recreating it, `--dry-run` writes nothing at all. If `PLAN.md` already exists in
-the project, adopt it — read it, then `rh plan import` — never overwrite it.
+the project, adopt it — read it, create its tasks with `rh add task`, never overwrite it.
 
 Ask for the project root, then load `<root>/.rh/env.json`; if absent or it does not parse,
 interview the user and write it with `rh env set`. Show the values and get a yes. Exit gate:
@@ -585,7 +586,7 @@ Commands agents use per phase:
 | `rh env set KEY=VALUE ...` | 0 | writes `.rh/env.json` (the only config file); `rh env show` reads it back |
 | `rh add note\|literature\|gaps\|log <h> -m "..."` | 3+ | appends under a heading, creating it if missing; literature accepts a DOI |
 | `rh search <query>` | any | rg-first local search over `.rh/` + artifacts, no indexing |
-| `rh add task / plan import` | 4–6 | mirrors PLAN.md steps into the board (`rh plan import`) |
+| `rh add task TITLE --id --deliverable --verify --subtask` | 4–6 | creates one board task, with its subtasks, explicitly |
 | `rh tasks set <id> idle\|working\|complete` | 5–6 | board state (subtask ids work too); `rh tasks` shows every task, subtask and status |
 | `rh phase` / `rh phase N` | any | no argument: the current phase and its exit gate. With N: **gated** advance, refusing unmet gates; `--force` is a waiver → record it in STATUS.md (rule 11) |
 | `rh resume` / `rh -r` | any | execs the Orchestrator **in this terminal**: command from `agents.commands.orchestrator` (which wires `.rh/agents/orchestrator.md` in as the system prompt), model + thinking level from `agents.roles.orchestrator`, only `agents.skills` loaded. Its first message is the skill read, not project state; it is not echoed to the terminal. `--dry-run` prints the exact command + prompt |
@@ -614,12 +615,15 @@ Contracts that keep the two layers consistent:
 2. **`rh phase` enforces §3's hard gates, but the artifacts it checks are the
    gate.** Passing the CLI check is not an exit gate by itself; the user
    confirmation, planner agreement, and critique sign-off still happen per §3.
-3. **The board mirrors the plan, not the reverse.** `rh plan import` reads
-   PLAN.md and refreshes the board: steps are added, and an existing id gets its
-   title, owner, deliverable, verify, kind, risk and dependencies updated (step
-   ids like `S04b` are valid). Replanning (§4) updates PLAN.md first, then
-   re-imports. STATUS.md remains the truth (rule 9) — the board is display state
-   for `rh tasks`.
+3. **Tasks are created explicitly; nothing parses the plan.** `PLAN.md` is prose
+   and stays prose — it is read by people and agents, never by a parser. Whoever
+   owns the plan turns its steps into board tasks with `rh add task "<title>" --id
+   S0N --owner … --deliverable … --verify … --subtask "…"` (repeatable `--subtask`;
+   ids like `S04b` are valid), and `rh tasks set <id> working|complete` moves them.
+   If an agent writes the plan, that agent creates the tasks; if the user writes it,
+   the Orchestrator creates them. Replanning (§4) edits `PLAN.md` first, then the
+   tasks. `STATUS.md` remains the truth (rule 9) — the board is display state for
+   `rh tasks`.
 
 4. **Same-terminal resume, explicit agent spawning.** Only the Orchestrator follows
    `rh resume` in the same terminal: it never opens a new pane or workspace, it execs

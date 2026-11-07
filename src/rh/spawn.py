@@ -605,7 +605,7 @@ def build_role_prompt(
             "",
             (
                 "No board tasks for this role yet — the Orchestrator mirrors PLAN.md "
-                "into the board with `rh plan import`."
+                "into the board with `rh add task` (steps and subtasks are created explicitly)."
             ),
         ]
     lines += [

@@ -76,33 +76,6 @@ def test_add_task_and_list(tmp_path, capsys):
     assert data["tasks"][0]["subtasks"][0]["state"] == "working"
 
 
-def test_plan_import_updates_titles_and_accepts_suffixed_ids(tmp_path):
-    root = tmp_path
-    run(["--root", str(root), "init"])
-    plan = root / ".rh" / "PLAN.md"
-    plan.write_text(
-        "### S03 — retired title\n"
-        "owner: researcher | deliverable: `results/a.json`\n"
-        "depends on: none | kind: build\n\n"
-        "### S04b — audit the valid cell\n"
-        "owner: researcher | deliverable: `results/b.json`\n"
-        "depends on: S03 | kind: audit\n",
-        encoding="utf-8",
-    )
-    assert [t["id"] for t in tasks.import_plan_md(root)] == ["S03", "S04b"]
-
-    plan.write_text(plan.read_text().replace("retired title", "current title"), encoding="utf-8")
-    changed = tasks.import_plan_md(root)
-    assert changed == [{"id": "S03", "title": "current title", "action": "updated",
-                        "fields": ["title"]}]
-    board = {t["id"]: t for t in tasks.TaskStore(root).list()}
-    assert board["S03"]["title"] == "current title"
-    assert board["S04b"]["kind"] == "audit"
-    assert board["S04b"]["depends_on"] == ["S03"]
-    # nothing changed -> no churn
-    assert tasks.import_plan_md(root) == []
-
-
 def test_papers_stay_at_root(tmp_path):
     root = tmp_path
     run(["--root", str(root), "init"])
@@ -722,16 +695,6 @@ def test_dry_run_writes_no_prompt_files(tmp_path, capsys):
     assert run(["--root", root, "resume", "--dry-run"]) == 0
     assert not (tmp_path / ".rh" / "resume-prompt.md").exists()
     assert not list((tmp_path / ".rh" / "tmp").glob("spawn-*-prompt.md"))
-
-
-def test_plan_import_is_read_only_for_plan(tmp_path):
-    root = tmp_path
-    run(["--root", str(root), "init", "--non-interactive"])
-    plan = root / ".rh" / "PLAN.md"
-    plan.write_text("### S01 — steps\nowner: researcher | deliverable: `x`\n", encoding="utf-8")
-    before = plan.read_text()
-    tasks.import_plan_md(root)
-    assert plan.read_text() == before
 
 
 def test_init_creates_role_files_and_orchestrator_checklist(tmp_path, capsys):

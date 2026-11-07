@@ -9,6 +9,16 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 Small fixes found while running the CLI against a real project. Add to this section
 until the user names a release.
 
+### Removed
+
+- **`rh plan import` is gone**, with its parser. A plan is prose: people and agents
+  read it, nothing guesses at it. Tasks are created explicitly —
+  `rh add task "<title>" --id S0N --owner … --deliverable … --verify … --subtask "…"`
+  (repeatable `--subtask`) — by whoever owns the plan: the agent that writes it, or
+  the Orchestrator when the user writes it. `rh tasks set <id> working|complete`
+  moves them, subtask ids included. The bundled skill says the same at §1, §3
+  phase 0 and §10 contract 3, so nothing points at a command that no longer exists.
+
 ### Fixed
 
 - `rh plan import` with no `PLAN.md` said "PLAN.md and the board agree", which is

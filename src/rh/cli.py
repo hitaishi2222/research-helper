@@ -12,7 +12,6 @@ Commands:
   rh status [--json]
   rh workflow [--mermaid] [--write]
   rh phase [0-9]          # show the current phase + its exit gate, or set it (gated)
-  rh plan import [--dry-run]
   rh resume / rh -r       # exec the orchestrator (model + thinking from .rh/env.json) here
   rh spawn <role> [prompt] ...   # open another role agent with the env.json command
   rh info <FILE.md>       # what that artifact is for, who owns it, its sections
@@ -287,7 +286,7 @@ def cmd_init(args, root: Path):
         print(f"  {ui.colorize('↷', ui.DIM)} archived (copy) to {b}")
     if plan_file.exists():
         print(
-            f"  {ui.colorize('↷', ui.YELLOW)} PLAN.md already exists at {plan_file} — adopt it (rh plan import), do not overwrite"
+            f"  {ui.colorize('↷', ui.YELLOW)} PLAN.md already exists at {plan_file} — read it (rh info PLAN.md); its steps become tasks with `rh add task`, never by overwrite"
         )
     if skipped:
         print(
@@ -726,7 +725,7 @@ def cmd_add(args, root: Path):
             if pf.exists() and pf.stat().st_size > 0:
                 print(
                     ui.colorize(
-                        f"↷ PLAN.md already exists at {pf} — appended a step; read it first (rh info PLAN.md) and mirror with `rh plan import`",
+                        f"↷ PLAN.md already exists at {pf} — appended a step; read it first (rh info PLAN.md), then create the matching task with `rh add task --id <id>`",
                         ui.YELLOW,
                     )
                 )
@@ -856,7 +855,7 @@ def cmd_tasks(args, root: Path):
     if not tasks:
         print(
             ui.colorize(
-                'No tasks yet — `rh plan import` or `rh add task "..."`.', ui.DIM
+                'No tasks yet — `rh add task "..."` (repeatable `--subtask`).', ui.DIM
             )
         )
         return 0
@@ -961,7 +960,7 @@ def cmd_status(args, root: Path):
     if not by_phase:
         print(
             ui.colorize(
-                "No tasks — `rh plan import` will mirror PLAN.md steps here.", ui.DIM
+                "No tasks — create them from PLAN.md with `rh add task` (see `rh info PLAN.md`).", ui.DIM
             )
         )
     elif len(by_phase) == 1:
@@ -1262,53 +1261,6 @@ def cmd_phase_set(args, root: Path):
         return 0
     print(ui.colorize(f"✓ phase → {tasks_mod.phase_name(args.phase)}", ui.GREEN))
     print(f"  exit gate: {exit_gate(args.phase)}")
-    return 0
-
-
-@with_root
-def cmd_plan_import(args, root: Path):
-    added = tasks_mod.import_plan_md(root, dry_run=args.dry_run)
-    if getattr(args, "json", False):
-        ui.json_out(added)
-        return 0
-    if not added:
-        plan = paths.artifact_path(root, "PLAN.md")
-        if not plan.exists():
-            print(
-                ui.colorize(
-                    f"no PLAN.md yet at {plan} — nothing to import. The user or an agent "
-                    "writes it (`rh info PLAN.md` shows the shapes it understands).",
-                    ui.DIM,
-                )
-            )
-            return 0
-        text = plan.read_text(encoding="utf-8")
-        if text.strip() and not tasks_mod.parse_plan_steps(text):
-            print(
-                ui.colorize(
-                    "No steps recognised in PLAN.md — nothing imported.", ui.YELLOW
-                )
-            )
-            print(
-                ui.colorize(
-                    "  A step is any of: a heading with an id (`## S07 — title`), a heading of\n"
-                    "  level 3+ (`### title`), a numbered line (`1. title`), or a bullet at\n"
-                    "  column 0 (`- title`). Bullets inside a step become its subtasks;\n"
-                    "  `owner:` `deliverable:` `verify:` `risk:` `depends on:` are optional.",
-                    ui.DIM,
-                )
-            )
-            return 0
-        print(
-            ui.colorize(
-                "PLAN.md and the board agree (nothing to import or update).", ui.DIM
-            )
-        )
-    for t in added:
-        mark = "+" if t.get("action") == "added" else "~"
-        fields = f"  [{', '.join(t['fields'])}]" if t.get("fields") else ""
-        subs = f"  {t['subtasks']} subtasks" if t.get("subtasks") else ""
-        print(f"  {ui.colorize(mark, ui.GREEN)} {t['id']} — {t['title']}{fields}{subs}")
     return 0
 
 
@@ -2307,12 +2259,6 @@ def build_parser():
         help="jump despite unmet gates (waiver goes in STATUS.md)",
     )
     s.set_defaults(func=cmd_phase_set)
-
-    s = sub.add_parser("plan", help="PLAN.md integration", parents=[common])
-    psub = s.add_subparsers(dest="pl", required=True)
-    pi = psub.add_parser("import", parents=[common])
-    pi.add_argument("--dry-run", action="store_true")
-    pi.set_defaults(func=cmd_plan_import)
 
     s = sub.add_parser("describe", help="AI map of the tool", parents=[common])
     s.set_defaults(func=cmd_describe)

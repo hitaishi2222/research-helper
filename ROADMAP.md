@@ -53,7 +53,8 @@ discussion first.
 - [x] `.rh/` workspace, `.rh/env.json` as the single config source
 - [x] `rh init`, `rh env show|set|list`, `rh describe`
 - [x] heading-structured artifacts: `add note|literature|layout|gaps|problem|plan|status|manuscript`
-- [x] task board: `add task`, `tasks`, `tasks set`, `plan import` (titles refresh)
+- [x] task board: `add task` (with `--subtask`), `tasks`, `tasks set`
+- [x] ~~`plan import`~~ removed: the plan is prose, the board is created explicitly
 - [x] phase pipeline with gated `rh phase` (no-arg shows the exit gate) and waivers
 - [x] `rh status` — phase rail, progress bars, per-phase tasks
 - [x] `rh search` — rg-first, Python fallback, no indexing

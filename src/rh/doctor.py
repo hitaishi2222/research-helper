@@ -59,6 +59,7 @@ def check(root: Path, env: dict | None = None) -> dict:
     if not isinstance(cmds, dict):
         cmds = {}
     named_roles = [r for r in cmds if r != "default"]
+    command_roles: set[str] = set()
     configured = 0
     for role in sorted(named_roles):
         tmpl = cmds.get(role)
@@ -81,9 +82,16 @@ def check(root: Path, env: dict | None = None) -> dict:
         has_prompt = "{prompt}" in tmpl or "{prompt_file}" in tmpl
         add(f"commands.{role}.placeholders", has_agent and has_prompt,
             f"{role}: has agent_file={has_agent} prompt={has_prompt}")
+        command_roles.add(role)
+
+    # role files: a role with a launch command or a configured model must have
+    # its `.rh/agents/<role>.md` — that file *is* the role, nothing is hardcoded.
+    configured_roles = {r for r, spec in ((env.get("agents") or {}).get("roles") or {}).items()
+                        if isinstance(spec, dict) and any(str(v).strip() for v in spec.values())}
+    for role in sorted(command_roles | configured_roles):
         role_ok = agents_mod.read_role(root, role) is not None
         add(f"role-file.{role}", role_ok,
-            f".rh/agents/{role}.md" + ("" if role_ok else " missing — `rh agents <role> --write`"))
+            f".rh/agents/{role}.md" + ("" if role_ok else " missing — `rh agents <role> --write`, then fill it in with the user"))
     if not configured:
         add("commands", False,
             "no agents.commands.<role> template set — rh resume/spawn have nothing to run; "

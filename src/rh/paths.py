@@ -46,12 +46,59 @@ def rh_dir(root: Path) -> Path:
     return root / RH_DIR
 
 
+def _bak_dir(root: Path) -> Path:
+    """A fresh `.rh/.bak/<timestamp>/` — never reusing one from the same second."""
+    bak = rh_dir(root) / ".bak"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = bak / stamp
+    n = 1
+    while dest.exists():
+        dest = bak / f"{stamp}-{n}"
+        n += 1
+    dest.mkdir(parents=True)
+    return dest
+
+
 def backup_file(root: Path, path: Path) -> Path:
     """Archive `path` to `.rh/.bak/<timestamp>/<name>`, return the backup copy."""
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest = rh_dir(root) / ".bak" / stamp / path.name
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest = _bak_dir(root) / path.name
     shutil.copy2(path, dest)
+    return dest
+
+
+def archive_tree(root: Path, src: Path) -> Path:
+    """Copy `src` aside, then remove it. Returns `.rh/.bak/<timestamp>/`.
+
+    The copy is made *before* the removal, so a failed copy leaves `src`
+    untouched. Used by `rh init --clean`, which must never delete what it could
+    not archive (event logs, notes, ENV.md, tasks.json) — and must not throw
+    away earlier archives either: they are re-filed beside the new one.
+    """
+    tmp = src.with_name(f"{src.name}.archiving-{os.getpid()}")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(src, tmp, symlinks=True)
+    old_bak = tmp / ".bak"
+    saved = None
+    if old_bak.exists():
+        saved = tmp.with_name(f"{tmp.name}-bak")
+        if saved.exists():
+            shutil.rmtree(saved)
+        old_bak.rename(saved)
+    shutil.rmtree(src)
+    dest = _bak_dir(root)
+    shutil.rmtree(dest)  # empty placeholder; the archived tree takes its place
+    tmp.rename(dest)
+    if saved:
+        bakdir = rh_dir(root) / ".bak"
+        for old in sorted(saved.iterdir()):
+            target = bakdir / old.name
+            n = 1
+            while target.exists():
+                target = bakdir / f"{old.name}-{n}"
+                n += 1
+            old.rename(target)
+        shutil.rmtree(saved)
     return dest
 
 

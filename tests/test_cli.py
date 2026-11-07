@@ -1,7 +1,8 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
-from rh import cli, config, spawn, tasks, workflow
+from rh import cli, config, paths, spawn, tasks, workflow
 
 
 def run(argv):
@@ -207,7 +208,9 @@ def test_spawn_uses_role_command_and_role_tasks(tmp_path, capsys):
     assert "do S01" in data["prompt"]
     assert "rh info" in data["prompt"]
     assert data["mode"] in ("pane", "background")
-    assert Path(data["prompt_file"]).exists()
+    # --dry-run writes nothing, not even the prompt file
+    assert data["prompt_file"].endswith("spawn-researcher-prompt.md")
+    assert not Path(data["prompt_file"]).exists()
     assert data["spawned"] is False
 
 
@@ -515,6 +518,183 @@ def test_init_questionnaire_skips_are_orchestrator_job(tmp_path):
     root = str(tmp_path)
     assert run(["--root", root, "init", "--slug", "demo"]) == 0
     assert (tmp_path / ".rh").is_dir()
+
+
+def test_init_questionnaire_skip_writes_nothing(tmp_path, capsys, monkeypatch):
+    """`s` means skip: the key is left alone, not written as the string "s"."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.backend=tuios", "agents.cli=pi",
+         "agents.skills=research-helper,tuios"])
+    before = config.load_env(tmp_path)
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a: "s")
+    assert run(["--root", root, "init", "--force"]) == 0
+    after = config.load_env(tmp_path)
+    assert after["project"]["slug"] == "demo"
+    assert after["agents"]["backend"] == "tuios"
+    assert after["agents"]["cli"] == "pi"
+    assert after["agents"]["skills"] == before["agents"]["skills"]
+    assert after["agents"]["skills"] != ["s"]
+    assert after["agents"]["backend"] != "s" and after["agents"]["split"] != "s"
+    assert not config.validate(after)
+
+
+def test_init_questionnaire_enter_keeps_existing_config(tmp_path, capsys, monkeypatch):
+    """Defaults come from ENV.md, so Enter never downgrades a configured project."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.count=3", "agents.backend=tuios",
+         "agents.cli=pi", "agents.skills=research-helper,tuios", "agents.split=vertical"])
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    assert run(["--root", root, "init", "--force"]) == 0
+    env = config.load_env(tmp_path)
+    assert env["project"]["slug"] == "demo"
+    assert env["agents"]["count"] == 3
+    assert env["agents"]["backend"] == "tuios"
+    assert env["agents"]["cli"] == "pi"
+    assert env["agents"]["skills"] == ["research-helper", "tuios"]
+    assert env["agents"]["split"] == "vertical"
+
+
+def test_init_questionnaire_ctrl_c_stops_asking(tmp_path, capsys, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_input(*a):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "demo"
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert run(["--root", str(tmp_path), "init"]) == 0
+    assert config.load_env(tmp_path)["project"]["slug"] == "demo"
+    assert calls["n"] == 2  # Ctrl-C ends the questionnaire, it does not continue it
+
+
+def test_init_clean_archives_the_whole_rh_dir_first(tmp_path, capsys):
+    """--clean must never delete what it could not archive (logs, notes, config)."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    (tmp_path / ".rh" / "logs" / "2026-01-01-x.md").write_text("# event log\n")
+    (tmp_path / ".rh" / "ENV.md").write_text('```json\n{"project": {"slug": "keep"}}\n```\n')
+    capsys.readouterr()
+    assert run(["--root", root, "init", "--clean", "--non-interactive"]) == 0
+    baks = list((tmp_path / ".rh" / ".bak").glob("*/ENV.md"))
+    assert baks and "keep" in baks[0].read_text()
+    assert list((tmp_path / ".rh" / ".bak").glob("*/logs/2026-01-01-x.md"))
+    assert (tmp_path / ".rh" / "ENV.md").exists()  # recreated, not missing
+
+
+def test_init_clean_force_archives_too(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    (tmp_path / ".rh" / "logs" / "keep.md").write_text("log\n")
+    capsys.readouterr()
+    assert run(["--root", root, "init", "--clean", "--force", "--non-interactive"]) == 0
+    assert list((tmp_path / ".rh" / ".bak").glob("*/logs/keep.md"))
+
+
+def test_repeated_clean_keeps_earlier_archives(tmp_path, capsys):
+    """Each --clean re-creates .rh/; the archives of earlier cleans must survive."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    (tmp_path / ".rh" / "logs" / "one.md").write_text("1\n")
+    capsys.readouterr()
+    assert run(["--root", root, "init", "--clean", "--non-interactive"]) == 0
+    (tmp_path / ".rh" / "logs" / "two.md").write_text("2\n")
+    assert run(["--root", root, "init", "--clean", "--non-interactive"]) == 0
+    logs = sorted(p.name for p in (tmp_path / ".rh" / ".bak").glob("*/logs/*.md"))
+    assert "one.md" in logs and "two.md" in logs
+
+
+def test_backups_in_the_same_second_do_not_overwrite(tmp_path, monkeypatch):
+    class FixedDT:
+        @staticmethod
+        def now():
+            return datetime(2026, 1, 2, 3, 4, 5)
+
+    monkeypatch.setattr(paths, "datetime", FixedDT)
+    f = tmp_path / "ENV.md"
+    f.write_text("one")
+    first = paths.backup_file(tmp_path, f)
+    f.write_text("two")
+    second = paths.backup_file(tmp_path, f)
+    assert first != second
+    assert first.read_text() == "one" and second.read_text() == "two"
+
+
+def test_deep_merge_does_not_mutate_defaults(tmp_path):
+    before = json.dumps(config.DEFAULT_ENV, sort_keys=True)
+    env = config.load_env(tmp_path)  # no ENV.md → defaults
+    config.set_nested(env, "agents.commands.coder", "pi {prompt}")
+    assert json.dumps(config.DEFAULT_ENV, sort_keys=True) == before
+
+
+def test_doctor_flags_missing_role_file_for_configured_role(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    run(["--root", root, "env", "set",
+         'agents.roles.researcher={"provider":"pi","model":"m1"}',
+         "agents.commands.researcher=pi --system-prompt-file {agent_file} --prompt-file {prompt_file}"])
+    capsys.readouterr()
+    assert run(["--root", root, "doctor", "--json"]) == 1
+    ids = {c["id"]: c for c in payload(capsys.readouterr().out, "{")["checks"]}
+    assert ids["role-file.researcher"]["ok"] is False
+    run(["--root", root, "agents", "researcher", "--write"])
+    capsys.readouterr()
+    assert run(["--root", root, "doctor", "--json"]) == 0
+
+
+def test_checklist_future_phases_are_not_pending(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    capsys.readouterr()
+    assert run(["--root", root, "checklist", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    by_id = {i["id"]: i for i in data["items"]}
+    assert by_id["phase-9"]["status"] == "later"
+    assert data["pending"] == len([i for i in data["items"] if i["status"] == "pending"])
+
+
+def test_checklist_accepts_bold_status_header(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    paths.artifact_path(tmp_path, "STATUS.md").write_text(
+        "phase: **6 IMPLEMENT** | step: S05 | updated: 2026-11-06T06:40\n")
+    capsys.readouterr()
+    assert run(["--root", root, "checklist", "--json"]) == 0
+    by_id = {i["id"]: i for i in payload(capsys.readouterr().out, "{")["items"]}
+    assert by_id["content-status-header"]["status"] == "ok"
+
+
+def test_checklist_reports_the_missing_header_part(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    paths.artifact_path(tmp_path, "STATUS.md").write_text("phase: 6 IMPLEMENT | step: S05\n")
+    capsys.readouterr()
+    assert run(["--root", root, "checklist", "--json"]) == 0
+    by_id = {i["id"]: i for i in payload(capsys.readouterr().out, "{")["items"]}
+    item = by_id["content-status-header"]
+    assert item["status"] == "pending" and "updated" in item["detail"]
+
+
+def test_dry_run_writes_no_prompt_files(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--slug", "demo", "--non-interactive"])
+    run(["--root", root, "agents", "researcher", "--write"])
+    run(["--root", root, "env", "set",
+         "agents.commands.researcher=pi --system-prompt-file {agent_file} --prompt-file {prompt_file}",
+         "agents.commands.orchestrator=pi --system-prompt-file {agent_file} --prompt-file {prompt_file}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "do it", "--dry-run"]) == 0
+    assert run(["--root", root, "resume", "--dry-run"]) == 0
+    assert not (tmp_path / ".rh" / "resume-prompt.md").exists()
+    assert not list((tmp_path / ".rh" / "tmp").glob("spawn-*-prompt.md"))
 
 
 def test_plan_import_is_read_only_for_plan(tmp_path):

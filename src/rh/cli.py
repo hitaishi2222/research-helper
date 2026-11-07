@@ -52,13 +52,13 @@ def with_root(fn):
 
 @with_root
 def cmd_init(args, root: Path):
-    """`rh init` — create the .rh/ workspace. Never overwrites without backup.
+    """`rh init` — create the .rh/ workspace. Never overwrites what it did not archive.
 
-    Existing files (ENV.md, tasks.json, PLAN.md, role files) are never
-    clobbered silently: without --force rh stops and says what exists; with
-    --force it archives each file to .rh/.bak/<timestamp>/ first and prints
-    the backup path. --dry-run previews everything without writing.
-    --clean still removes .rh/ (kept for compatibility, with a warning).
+    Existing files are never clobbered silently: without --force rh refuses and
+    names what exists. --force archives ENV.md + tasks.json to
+    `.rh/.bak/<timestamp>/` before writing (a copy — it keeps the originals and
+    their environment notes). --clean archives the whole `.rh/` tree there
+    first, so event logs and notes survive it. --dry-run writes nothing.
     """
     dry = bool(getattr(args, "dry_run", False))
     force = bool(getattr(args, "force", False))
@@ -73,9 +73,12 @@ def cmd_init(args, root: Path):
     # Sensitive existing files
     env_file = paths.env_md(root)
     tasks_file = paths.tasks_json(root)
+    had_env = env_file.exists()
     for f, what in ((env_file, "ENV.md config block"), (tasks_file, "task board")):
         if f.exists():
-            would_write.append(f"{f} exists ({what}) — kept, unless --force archives it first")
+            would_write.append(f"{f} exists ({what}) — kept unless --force archives it first")
+    if args.clean and d.exists():
+        would_write.append(f"--clean: archive {d}/ to .rh/.bak/<timestamp>/ (event logs, notes included), then recreate it")
     plan_file = paths.artifact_path(root, "PLAN.md")
     if plan_file.exists():
         would_write.append(f"PLAN.md already exists at {plan_file} — adopt it, do not overwrite")
@@ -83,17 +86,31 @@ def cmd_init(args, root: Path):
     # Existing role files
     role_files = sorted((d / "agents").glob("*.md")) if (d / "agents").is_dir() else []
 
-    # Questionnaire answers (skippable — Orchestrator asks later if skipped)
+    # Non-destructive guard: existing files block without --force
+    blocking = [str(f) for f in (env_file, tasks_file) if f.exists()]
+    if blocking and not force and not args.clean:
+        print(ui.colorize("✗ refusing to overwrite existing files without --force:", ui.RED), file=sys.stderr)
+        for b in blocking:
+            print(f"  - {b}", file=sys.stderr)
+        print(ui.colorize("  --force archives a copy to .rh/.bak/<timestamp>/ and keeps the rest; "
+                          "--clean archives the whole .rh/ and recreates it", ui.DIM), file=sys.stderr)
+        return 1
+
+    # Questionnaire answers (skippable — the Orchestrator asks later if skipped).
+    # Defaults are the values already in ENV.md, so Enter never downgrades a
+    # configured project.
     answers: dict[str, str] = {}
+    skipped: list[str] = []
     if not args.non_interactive and not dry and not getattr(args, "json", False):
-        answers = _init_questionnaire(args, root)
+        answers, skipped = _init_questionnaire(args, root)
 
     # Effective slug: flag wins, then questionnaire, then existing
     slug = args.slug or answers.get("slug") or ""
 
     if dry:
         if getattr(args, "json", False):
-            ui.json_out({"root": str(root), "would_write": would_write, "dry_run": True, "slug": slug, "answers": answers})
+            ui.json_out({"root": str(root), "would_write": would_write, "dry_run": True,
+                         "slug": slug, "answers": answers, "skipped": skipped})
             return 0
         print(ui.banner("rh init (dry-run)", f"{root}"))
         for w in would_write:
@@ -105,118 +122,133 @@ def cmd_init(args, root: Path):
             print(f"  would set project.slug={slug}")
         if answers:
             print(f"  questionnaire answers: {answers}")
+        if skipped:
+            print(f"  would leave untouched: {', '.join(skipped)}")
         print(ui.colorize("  nothing written (dry-run)", ui.DIM))
         return 0
 
-    if args.clean:
-        import shutil as _shutil
-        print(ui.colorize(f"  --clean: removing {d}/ (including ENV.md and tasks.json)", ui.YELLOW))
-        _shutil.rmtree(d, ignore_errors=True)
-
-    # Non-destructive guard: existing sensitive files block without --force
-    blocking = [] if args.clean else [str(f) for f in (env_file, tasks_file) if f.exists()]
-    if blocking and not force:
-        print(ui.colorize("✗ refusing to overwrite existing files without --force:", ui.RED), file=sys.stderr)
-        for b in blocking:
-            print(f"  - {b}", file=sys.stderr)
-        print(ui.colorize("  re-run with --force to archive them to .rh/.bak/<timestamp>/ and start fresh", ui.DIM), file=sys.stderr)
-        return 1
-
-    # Backup before any overwrite
-    for f in [env_file, tasks_file]:
-        if f.exists():
-            bak = paths.backup_file(root, f)
-            backups.append(str(bak))
+    # Archive before anything is overwritten or removed.
+    if args.clean and d.exists():
+        archived = paths.archive_tree(root, d)  # copy, then remove: nothing is lost
+        backups.append(str(archived))
+        print(ui.colorize(f"  --clean: archived {d}/ → {archived}", ui.YELLOW))
+    else:
+        for f in (env_file, tasks_file):
+            if f.exists():
+                backups.append(str(paths.backup_file(root, f)))
 
     d = paths.ensure_layout(root)
     tasks_mod.TaskStore(root).load()  # ensure tasks.json shape exists lazily
 
     # ENV.md: created when missing, updated with the slug/questionnaire answers,
-    # left untouched (content-wise) otherwise
+    # otherwise left as it is (environment notes stay put)
     if slug or answers or not env_file.exists():
         env = config.load_env(root)
         if slug:
             env["project"]["slug"] = slug
         for key, val in answers.items():
-            if key.startswith(("agents.", "project.")):
-                try:
-                    config.set_nested(env, key, config.coerce_value(val, config.schema_for(key)[1]))
-                except Exception:
-                    print(ui.colorize(f"  ⚠ could not write {key}={val!r} — set it later with "
-                                      f"`rh env set {key}=...`", ui.YELLOW))
+            if not key.startswith(("agents.", "project.")):
+                continue
+            try:
+                config.set_nested(env, key, config.coerce_value(val, config.schema_for(key)[1]))
+            except Exception:
+                print(ui.colorize(f"  ⚠ could not write {key}={val!r} — set it later with "
+                                  f"`rh env set {key}=...`", ui.YELLOW))
         config.save_env(root, env)
 
-    (d / ".gitkeep").write_text("") if not (d / ".gitkeep").exists() else None
+    if not (d / ".gitkeep").exists():
+        (d / ".gitkeep").write_text("")
     if getattr(args, "json", False):
         ui.json_out({"root": str(root), "rh_dir": str(d), "initialized": True,
-                     "backups": backups, "slug": slug, "answers": answers})
+                     "backups": backups, "slug": slug, "answers": answers, "skipped": skipped})
         return 0
     print(ui.banner("rh init", f"{root}"))
     print(f"  {ui.colorize('✓', ui.GREEN)} created {d}/")
     for sub in ("logs/", "notes/", "tasks/", "tmp/"):
         print(f"  {ui.colorize('✓', ui.GREEN)} .rh/{sub}")
     print(f"  {ui.colorize('✓', ui.GREEN)} src/ results/ papers/ at root")
-    if backups:
+    if not had_env or args.clean:
         print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
-        for b in backups:
-            print(f"  {ui.colorize('↷', ui.DIM)} archived to {b}")
-    elif env_file.exists() and not (slug or answers):
-        print(f"  {ui.colorize('↷', ui.DIM)} ENV.md kept as-is at {env_file}")
+    elif slug or answers:
+        print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md updated at {env_file}")
     else:
-        print(f"  {ui.colorize('✓', ui.GREEN)} ENV.md at .rh/ENV.md (config + environment notes)")
+        print(f"  {ui.colorize('↷', ui.DIM)} ENV.md kept as-is at {env_file}")
+    for b in backups:
+        print(f"  {ui.colorize('↷', ui.DIM)} archived (copy) to {b}")
     if role_files:
         for rf in role_files:
             print(f"  {ui.colorize('↷', ui.DIM)} kept role file {rf} (not overwritten)")
     if plan_file.exists():
-        print(ui.colorize(f"  {ui.colorize('↷', ui.YELLOW)} PLAN.md already exists at {plan_file} — adopt it (rh plan import), do not overwrite", ui.DIM))
-    if answers:
-        skipped = [k for k, v in answers.items() if v == "s"]
-        if skipped:
-            print(ui.colorize(f"  skipped (Orchestrator will ask): {', '.join(skipped)}", ui.DIM))
+        print(f"  {ui.colorize('↷', ui.YELLOW)} PLAN.md already exists at {plan_file} — adopt it (rh plan import), do not overwrite")
+    if skipped:
+        print(ui.colorize(f"  skipped (Orchestrator will ask): {', '.join(skipped)}", ui.DIM))
     print()
     print(f"Next: {ui.colorize('rh env set project.slug=<name>', ui.CYAN)}  "
           f"·  {ui.colorize('rh env show', ui.CYAN)}  ·  {ui.colorize('rh doctor', ui.CYAN)}")
     return 0
 
 
-def _init_questionnaire(args, root: Path) -> dict[str, str]:
+def _init_questionnaire(args, root: Path) -> tuple[dict[str, str], list[str]]:
     """Ask the few questions that let ENV.md be born with answers.
 
-    Every question is skippable with `s` (or empty with no default): the
-    Orchestrator asks later. Non-interactive callers never reach here
+    Defaults are read from the ENV.md already on disk, so pressing Enter keeps
+    the project's current settings instead of resetting them. `s` (or Ctrl-C)
+    **skips**: the key is not written at all and is returned in `skipped` so the
+    Orchestrator can ask later. Non-interactive callers never reach here
     (--non-interactive, --json, --dry-run skip it entirely).
     """
     if not sys.stdin.isatty():
-        return {}
+        return {}, []
+    env = config.load_env(root)
+    agents = env.get("agents") or {}
     answers: dict[str, str] = {}
+    skipped: list[str] = []
+    stopped = False  # Ctrl-C skips this and every later question
 
     def ask(key: str, title: str, default: str, choices: str = "") -> None:
+        nonlocal stopped
+        if stopped:
+            skipped.append(key)
+            return
         print(ui.colorize(f"? {title}", ui.BOLD))
         if choices:
             print(ui.colorize(f"  {choices}", ui.DIM))
-        print(ui.colorize(f"  enter=default {default!r} · s=skip (Orchestrator asks later) · Ctrl-C=skip all", ui.DIM))
+        print(ui.colorize(f"  enter=keep {default!r} · s=skip (Orchestrator asks later) · Ctrl-C=skip the rest", ui.DIM))
         try:
             raw = input("  > ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            answers[key] = "s"
+            stopped = True
+            skipped.append(key)
             return
         if raw.lower() == "s":
-            answers[key] = "s"
+            skipped.append(key)
         elif raw == "":
             answers[key] = default
         else:
             answers[key] = raw
 
-    ask("slug", "Project slug (kebab-case, e.g. my-project)", args.slug or "demo")
-    ask("agents.count", "How many parallel agents for planning and research? (1..4)", "1", "1 | 2 | 3 | 4")
-    ask("agents.backend", "Backend for parallel agents?", "none", "tmux | herdr | tuios | none")
-    ask("agents.cli", "Agent CLI binary?", "", "e.g. pi, claude, codex — blank = harness default")
-    ask("agents.shell", "Your shell?", "", "e.g. fish, zsh, bash — blank = $SHELL")
-    ask("agents.split", "Pane layout for rh spawn?", "", "vertical | horizontal | window — blank = ask at first spawn")
-    ask("agents.skills", "Skills every agent must load?", "research-helper", "comma-separated, e.g. research-helper,crw")
+    ask("slug", "Project slug (kebab-case, e.g. my-project)",
+        args.slug or str((env.get("project") or {}).get("slug") or "demo"))
+    ask("agents.count", "How many parallel agents for planning and research? (1..4)",
+        str(agents.get("count") or 1), "1 | 2 | 3 | 4")
+    ask("agents.backend", "Backend for parallel agents?",
+        str(agents.get("backend") or "none"), "tmux | herdr | tuios | none")
+    ask("agents.cli", "Agent CLI binary?",
+        str(agents.get("cli") or ""), "e.g. pi, claude, codex — blank = harness default")
+    ask("agents.shell", "Your shell?",
+        str(agents.get("shell") or ""), "e.g. fish, zsh, bash — blank = $SHELL")
+    ask("agents.split", "Pane layout for rh spawn?",
+        str(agents.get("split") or ""), "vertical | horizontal | window — blank = ask at first spawn")
+    skills = agents.get("skills") or []
+    ask("agents.skills", "Skills every agent must load?",
+        ",".join(str(s) for s in skills) if isinstance(skills, list) else str(skills),
+        "comma-separated, e.g. research-helper,crw")
 
     # harness snippet: copy-paste only, never executed here
+    if stopped:
+        skipped.append("snippet")
+        return answers, skipped
     print(ui.colorize("? Harness snippet (examples/envs/*.sh) — copy-paste, s=skip", ui.BOLD))
     print(ui.colorize("  pi | claude | codex | custom (type the file path, or s to skip)", ui.DIM))
     try:
@@ -228,8 +260,9 @@ def _init_questionnaire(args, root: Path) -> dict[str, str]:
     elif raw and raw != "s":
         answers["snippet"] = raw
     else:
-        answers["snippet"] = "s"
-    return answers
+        skipped.append("snippet")
+    return answers, skipped
+
 
 def _env_value(value) -> str:
     """One-line display for a config value (dicts become provider/model)."""
@@ -833,8 +866,9 @@ def cmd_resume(args, root: Path):
         extra = f"{extra}\n{text}".strip() if extra else text
     prompt = resume_mod.build_prompt(root, env, gate, store, extra=extra)
     prompt_file = paths.rh_dir(root) / "resume-prompt.md"
-    prompt_file.parent.mkdir(parents=True, exist_ok=True)
-    prompt_file.write_text(prompt + "\n", encoding="utf-8")
+    if not dry:  # --dry-run writes nothing, not even the prompt file
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text(prompt + "\n", encoding="utf-8")
     slug = env.get("project", {}).get("slug") or "untitled"
 
     # The launch command (model + thinking level included) is written in ENV.md's
@@ -929,6 +963,8 @@ def cmd_checklist(args, root: Path):
             mark = ui.colorize("[✓]", ui.GREEN)
         elif st == "current":
             mark = ui.colorize("[~]", ui.CYAN)
+        elif st == "later":
+            mark = ui.colorize("[·]", ui.DIM)
         else:
             mark = ui.colorize("[ ]", ui.YELLOW)
         print(f"  {mark} {item['label']}")
@@ -1047,7 +1083,9 @@ def cmd_agent_status(args, root: Path):
         return 0
     print(ui.banner("Agent status", f"root: {root}"))
     if not rows:
-        print(ui.colorize("No spawns recorded yet — `rh spawn <role>` writes .rh/logs/spawns.jsonl.", ui.DIM))
+        print(ui.colorize("No spawns recorded yet — `rh spawn <role>` writes .rh/logs/spawns.jsonl from here on.", ui.DIM))
+        print(ui.colorize("  pane spawns record no pid, so they never count against agents.count; "
+                          "the panes are visible to the user instead.", ui.DIM))
         return 0
     for r in rows:
         alive = ""
@@ -1168,8 +1206,9 @@ def cmd_spawn(args, root: Path):
     store = tasks_mod.TaskStore(root)
     prompt = spawn_mod.build_role_prompt(root, env, role, store, extra=extra)
     prompt_file = paths.rh_dir(root) / "tmp" / f"spawn-{add_mod.slugify(role)}-prompt.md"
-    prompt_file.parent.mkdir(parents=True, exist_ok=True)
-    prompt_file.write_text(prompt + "\n", encoding="utf-8")
+    if not getattr(args, "dry_run", False):  # --dry-run writes nothing
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text(prompt + "\n", encoding="utf-8")
     plan = spawn_mod.launch_plan(root, env, role, prompt, prompt_file)
     if plan["argv"] is None:
         if plan.get("error"):
@@ -1326,11 +1365,13 @@ def build_parser():
     p.add_argument("-r", "--resume", action="store_true", help="shortcut for `rh resume` (spawn harness + go-forward prompt)")
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    s = sub.add_parser("init", help="create .rh/ layout (non-destructive; --force archives first, --dry-run previews)",
+    s = sub.add_parser("init", help="create .rh/ layout (non-destructive; --force/--clean archive first, --dry-run previews)",
                        parents=[common])
     s.add_argument("--slug", default=None)
-    s.add_argument("--clean", action="store_true", help="remove .rh/ first (with --force, archives first)")
-    s.add_argument("--force", action="store_true", help="archive existing ENV.md/tasks.json to .rh/.bak/<timestamp>/ and start fresh")
+    s.add_argument("--clean", action="store_true",
+                   help="archive .rh/ (event logs, notes, ENV.md, tasks.json) to .rh/.bak/<timestamp>/ then recreate it")
+    s.add_argument("--force", action="store_true",
+                   help="archive a copy of ENV.md/tasks.json to .rh/.bak/<timestamp>/ before init writes")
     s.add_argument("--dry-run", action="store_true", help="preview what would be written without writing")
     s.add_argument("--non-interactive", action="store_true", help="skip the questionnaire (agents/CI)")
     s.set_defaults(func=cmd_init)

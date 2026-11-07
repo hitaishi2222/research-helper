@@ -65,14 +65,19 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
   `{prompt}` in a command template is a config warning immediately, not only
   at spawn.
 - **`examples/envs/{pi,claude,codex}.sh`** — the only place harness flags live.
-- **`rh init` is non-destructive.** Existing `ENV.md`, `tasks.json`, and role
-  files are never overwritten silently: `--force` archives each to
-  `.rh/.bak/<timestamp>/` first; `--dry-run` previews; `--clean` needs
-  `--force` when files exist. `PLAN.md` is never touched by init.
-- **`rh init` questionnaire.** A few skippable questions (slug, count, backend,
-  CLI, shell, split, skills, harness snippet) write ENV.md in one go. Every
-  question can be skipped (`s`); skipping makes it the Orchestrator's job.
-  `--non-interactive` / `--json` skip it entirely.
+- **`rh init` is non-destructive.** Existing `ENV.md`/`tasks.json` block init
+  unless `--force`, which archives a *copy* to `.rh/.bak/<timestamp>/` first
+  (originals and their environment notes stay put). `--clean` archives the whole
+  `.rh/` tree — event logs and notes included — before recreating it, so nothing
+  is deleted that was not archived. Backups never collide inside one second.
+  `--dry-run` writes nothing. `PLAN.md` is never touched by init.
+- **`rh init` questionnaire.** Few skippable questions (slug, count, backend,
+  CLI, shell, split, skills, harness snippet). Defaults are read from the
+  ENV.md already on disk, so Enter keeps the project's settings instead of
+  resetting them; `s` really skips (the key is not written) and `Ctrl-C` ends
+  the questionnaire; skipped questions become the Orchestrator's job. The
+  overwrite guard runs *before* the questions, so a configured project is not
+  quizzed and then refused. `--non-interactive` / `--json` skip it entirely.
 - **`PLAN.md` guard.** Pre-existing `PLAN.md` is adopted, never overwritten:
   `rh` reads it and mirrors it with `rh plan import`; forced writes archive
   to `.rh/.bak/` first. `rh plan import` stays read-only for `PLAN.md`.
@@ -93,6 +98,24 @@ Delegation, config honesty and artifact documentation (from the ISSUES list).
   are not passed.
 
 ### Fixed
+
+- **`DEFAULT_ENV` was mutated by `config.load_env()`.** `deep_merge` shared nested
+  dicts with the defaults, so any `env set` on a key missing from ENV.md edited
+  the process-wide defaults for everything that ran afterwards. Now deep-copied.
+- **`rh init` skip wrote `"s"`.** `s` was stored as the value: `project.slug="s"`,
+  `agents.backend="s"`, `skills=["s"]` — an invalid config. Skip is now absent.
+- **`rh init --clean` deleted without archiving** (and `--clean --force` archived
+  nothing, since the removal ran first). The archive now happens before any
+  deletion, covers the whole `.rh/` tree, and keeps the archives of earlier
+  cleans.
+- **`rh checklist` header check** missed a bold header (`phase: **6 IMPLEMENT**`)
+  and claimed to verify `step:`/`updated:` while only testing `phase:`; it now
+  names the missing part. Phases after the current one report `later` instead of
+  counting as pending.
+- **`rh doctor`** now also checks the role file for every role that has a model
+  configured, not only roles with a command template.
+- **`--dry-run` wrote prompt files** (`spawn-*.md`, `resume-prompt.md`). It now
+  writes nothing.
 
 - **Duplicate progress bars.** `rh status` printed the same completion twice (a
   `Progress:` line plus the bar under the phase rail) and repeated the counts in

@@ -6,6 +6,7 @@ environment notes) is preserved verbatim across `rh env set`.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from pathlib import Path
@@ -117,12 +118,18 @@ class ConfigError(RuntimeError):
 
 
 def deep_merge(base: dict, override: dict) -> dict:
-    out = dict(base)
+    """Merge `override` over a *copy* of `base`.
+
+    Deep copies on purpose: callers mutate the result (`env set`, the init
+    questionnaire), and sharing nested dicts with DEFAULT_ENV would edit the
+    process-wide defaults for everything that runs afterwards.
+    """
+    out = copy.deepcopy(base)
     for k, v in override.items():
         if k in out and isinstance(out[k], dict) and isinstance(v, dict):
             out[k] = deep_merge(out[k], v)
         else:
-            out[k] = v
+            out[k] = copy.deepcopy(v)
     return out
 
 

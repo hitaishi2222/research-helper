@@ -39,12 +39,20 @@ def _phase_items(root: Path, env: dict | None = None) -> list[dict]:
     items: list[dict] = []
     for i in range(10):
         done = bool(gate["done"][i])
+        if done:
+            status, detail = "ok", ""
+        elif i == current:
+            status, detail = "current", "gate not yet met"
+        elif i > current:
+            status, detail = "later", f"not reached yet (phase {current})"
+        else:
+            status, detail = "pending", "gate not yet met"
         items.append({
             "id": f"phase-{i}",
             "label": f"{phase_name(i)} exit: {PHASE_EXIT[i]}",
-            "status": "ok" if done else ("current" if i == current else "pending"),
+            "status": status,
             "ref": f"§3 phase {i}",
-            "detail": "" if done else "gate not yet met",
+            "detail": detail,
         })
     return items
 
@@ -166,13 +174,22 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     lit_text = _read("LITERATURE.md")
     layout_text = _read("OUTPUT_LAYOUT.md")
 
-    status_header_ok = bool(_re.search(r"phase:\s*\d", status_text)) if status_text else False
+    # `phase: **6 IMPLEMENT**` is as valid as `phase: 6 IMPLEMENT` — tolerate
+    # markdown emphasis, and say which of the three parts is missing.
+    header_parts = {
+        "phase": r"phase:\s*\**[\d]+",
+        "step": r"step:\s*\**\s*[^\s*|]+",
+        "updated": r"updated:\s*\**\s*\S",
+    }
+    header_missing = [n for n, rx in header_parts.items()
+                      if not (status_text and _re.search(rx, status_text, _re.IGNORECASE))]
     items.append({
         "id": "content-status-header",
-        "label": "STATUS.md has the `phase: | step: | updated:` header line",
-        "status": "ok" if status_header_ok else "pending",
+        "label": "STATUS.md has the `phase: | step: | updated:` header (what agents read for state)",
+        "status": "pending" if header_missing else "ok",
         "ref": "§5 STATUS.md",
-        "detail": "" if status_header_ok else "STATUS.md header missing `phase: <n> | step: <id> | updated: <ISO>` — agents navigating by it will misread phase",
+        "detail": (f"header missing: {', '.join(header_missing)} — write `phase: <n NAME> | step: <id> | updated: <ISO>` "
+                   "(markdown emphasis is fine)") if header_missing else "",
     })
 
     plan_steps = _re.findall(r"(?m)^###\s+(S\w+)", plan_text)

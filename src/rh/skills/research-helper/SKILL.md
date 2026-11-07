@@ -189,10 +189,13 @@ Every phase states its **exit gate**. Do not enter the next phase with an unmet 
 ### Phase 0 — CONFIG → `.rh/ENV.md` config block
 
 `rh init` walks a short questionnaire (slug, agent count, backend, CLI, shell,
-split, skills — each skippable; skipping is the Orchestrator's job to ask later).
-It never overwrites existing files without archiving them first (`.rh/.bak/`);
-`--dry-run` previews and `--force` archives. If `PLAN.md` already exists in the
-project, adopt it — read it, then `rh plan import` — never overwrite it.
+split, skills). Defaults are the values already in ENV.md, so Enter keeps a
+configured project as it is; `s` really skips (`s` is never written as a value) —
+a skipped question is yours to ask later. It never overwrites existing files
+without archiving them first (`.rh/.bak/`): `--force` archives a copy,
+`--clean` archives the whole `.rh/` (event logs, notes) before recreating it,
+`--dry-run` writes nothing at all. If `PLAN.md` already exists in the project,
+adopt it — read it, then `rh plan import` — never overwrite it.
 
 Ask for the project root, then load `<root>/.rh/ENV.md`; if absent or its config block does
 not parse, interview and write the block. Print it and get a yes. Exit gate: the block

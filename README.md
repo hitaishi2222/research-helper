@@ -56,9 +56,10 @@ nothing else to download.
 ## Quickstart
 
 ```bash
-rh init --slug my-project        # non-destructive; asks a few questions, s=skip
-rh init --dry-run                # preview without writing
-rh init --force                  # archive existing ENV.md/tasks.json to .rh/.bak/ and start fresh
+rh init --slug my-project        # non-destructive; asks a few questions (Enter keeps ENV.md's values, s=skip)
+rh init --dry-run                # preview without writing anything, not even the prompt files
+rh init --force                  # archive a copy of ENV.md/tasks.json to .rh/.bak/ before writing
+rh init --clean                   # archive the whole .rh/ (event logs, notes) then recreate it
 rh env set agents.count=2 agents.backend=tmux agents.cli=pi \
   agents.skills=research-helper,crw literature.search=crw project.git=true
 rh env show                 # config as a table, validated
@@ -80,7 +81,7 @@ A tool on `PATH` does not mean this project should use it.
 
 | Command | What it does |
 |---|---|
-| `rh init [--slug NAME] [--clean]` | create the `.rh/` workspace |
+| `rh init [--slug NAME] [--force] [--clean] [--dry-run]` | create the `.rh/` workspace, non-destructively (archives before writing or removing) |
 | `rh env show` | print config as a table + environment notes, validate |
 | `rh env set KEY=VALUE ...` | set any key from the §2 schema (`rh env list`) |
 | `rh env list` | every settable key, type, choices, help |

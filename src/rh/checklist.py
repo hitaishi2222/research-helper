@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import agents as agents_mod
 from . import config, paths
-from .tasks import PHASE_EXIT, TaskStore, phase_name
+from .tasks import PHASE_EXIT, TaskStore, phase_exit, phase_name
 
 # Roles that get their own agent, per agents.count (SKILL.md §5).
 LAUNCH_ROLES = {
@@ -60,7 +60,7 @@ def _phase_items(root: Path, env: dict | None = None) -> list[dict]:
             status, detail = "pending", "gate not yet met"
         items.append({
             "id": f"phase-{i}",
-            "label": f"{phase_name(i)} exit: {PHASE_EXIT[i]}",
+            "label": f"{phase_name(i)} exit: {phase_exit(i, config.user_plans(env))}",
             "status": status,
             "ref": f"§3 phase {i}",
             "detail": detail,

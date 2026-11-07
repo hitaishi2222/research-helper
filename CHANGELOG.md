@@ -4,6 +4,58 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.1.4] — 2026-11-07
+
+A plan written in ordinary Markdown, no planners if you don't want them, and the
+project's software list in the config.
+
+### Added
+
+- **`PLAN.md` in general Markdown.** `rh plan import` used to accept one shape
+  (`### S07 — title`). It now recognises, first one found wins: a heading with an
+  explicit id at any level · any level>=3 heading · a numbered heading (`## 1. x`,
+  when no level>=3 heading exists) · a numbered line at column 0 · a bullet at
+  column 0. A heading that is not a step is a **section boundary**, so
+  `## 1. What works` never becomes a task. Steps without an id get positional ids
+  (`S01`…), fields are case-insensitive and all optional, and a plan with no
+  recognisable step now says so plus the accepted shapes instead of "the board
+  agrees".
+- **Subtasks are read from `PLAN.md`.** Bullet lines inside a step (`- [ ] x`,
+  indented or not) become that step's subtasks. Import creates them; re-import
+  **appends** new ones (`S07.3`) and never deletes one or resets a state — a
+  subtask that leaves the plan keeps its row and its evidence.
+- **`agents.planners.models = none`.** `none` / `0` / `[]` means no planner is
+  configured and **the user is the planner**: phase 4's exit gate reads
+  "PLAN.md: written by the user (no planner models configured) + user approval",
+  `rh doctor` and `rh env show` say so, and `rh info PLAN.md` names the user as
+  author with the Orchestrator reconciling. Before, the key was not settable at
+  all (`rh env set` knew only `.0` / `.1`).
+- **`project.environment`** — the software this project actually runs, as a JSON
+  list of `{name, version, note}`. `rh env set` writes it, `validate()` names an
+  entry with no `name`, and `rh env show` prints a *Project environment* table.
+  List coercion passes object entries through untouched instead of stringifying
+  them.
+- `rh plan import` reports how many subtasks a new step carries.
+
+### Changed
+
+- Phase-exit text moved behind `tasks.phase_exit(phase, user_plans)`; `rh phase`,
+  its gate-refusal messages and the checklist labels all use it, so no surface
+  can disagree about who writes `PLAN.md`.
+- `rh info PLAN.md` documents the accepted shapes, the subtask rule, and who is
+  responsible for keeping the board in sync (an agent that writes the plan
+  imports its own steps; a user-written plan is imported by the Orchestrator).
+- `rh show` no longer half-strips backticks from a step title — inner markup is
+  the author's.
+
+### Fixed
+
+- A plan parsed as bullets-only when its steps were numbered `## 1.` headings
+  (the bullets became steps). Covered by a test that fails on 0.1.3.
+- `agents.planners.models` holding a non-model entry was silently accepted.
+
+Tests: 83 passed (63 before this change; 20 new in `tests/test_plan_lenient.py`).
+
 ## [0.1.3] — 2026-11-07
 
 Fixes from the second test pass: one config file, a real Orchestrator to-do list

@@ -576,6 +576,23 @@ def cmd_env_show(args, root: Path):
         for key, _kind, _choices, _help in config.ENV_SCHEMA
     ]
     print(ui.table(["key", "value"], rows))
+    tools = (env.get("project") or {}).get("environment") or []
+    tools = [t for t in tools if isinstance(t, dict) and str(t.get("name", "")).strip()]
+    if tools:
+        print()
+        print(ui.colorize("Project environment (the software this project runs)", ui.DIM))
+        print(ui.table(
+            ["software", "version", "what it is for"],
+            [[str(t.get("name", "")), str(t.get("version") or "—"),
+              str(t.get("note") or "")] for t in tools],
+        ))
+    if config.user_plans(env):
+        print()
+        print(ui.colorize(
+            "planners: none — the user is the planner "
+            "(phase 4 gate: user-authored PLAN.md + user approval)",
+            ui.DIM,
+        ))
     tail = config.environment_notes(root)
     if tail.strip():
         print()
@@ -643,7 +660,7 @@ def cmd_env_set(args, root: Path):
             continue
         kind = spec[1]
         try:
-            value = config.coerce_value(raw, kind)
+            value = config.coerce_value(raw, kind, key)
         except ValueError as e:
             print(f"⚠ {key}: {e}", file=sys.stderr)
             continue
@@ -1150,6 +1167,10 @@ def cmd_phase_set(args, root: Path):
     store = tasks_mod.TaskStore(root)
     current = store.current_phase()
     gate = config.phase_gate(root)
+    plans = config.user_plans(config.load_env(root))
+
+    def exit_gate(phase: int) -> str:
+        return tasks_mod.phase_exit(phase, plans)
 
     if args.phase is None or args.phase == current:
         # `rh phase` — the phase is a gate, not a badge: show what it costs to leave it
@@ -1158,7 +1179,7 @@ def cmd_phase_set(args, root: Path):
                 {
                     "phase": current,
                     "phase_name": tasks_mod.phase_name(current),
-                    "exit_gate": tasks_mod.PHASE_EXIT[current],
+                    "exit_gate": exit_gate(current),
                     "met": gate["done"][current],
                     "gate": gate,
                 }
@@ -1170,12 +1191,12 @@ def cmd_phase_set(args, root: Path):
             if gate["done"][current]
             else ui.colorize("unmet", ui.YELLOW)
         )
-        print(f"  exit gate ({status}): {tasks_mod.PHASE_EXIT[current]}")
+        print(f"  exit gate ({status}): {exit_gate(current)}")
         if args.phase is None:
             nxt = min(current + 1, 9)
             if nxt != current:
                 print(
-                    f"  next   → {tasks_mod.phase_name(nxt)}: {tasks_mod.PHASE_EXIT[nxt]}"
+                    f"  next   → {tasks_mod.phase_name(nxt)}: {exit_gate(nxt)}"
                 )
             print(
                 ui.colorize(
@@ -1199,7 +1220,7 @@ def cmd_phase_set(args, root: Path):
             )
             for i in unmet:
                 print(
-                    f"  - {tasks_mod.phase_name(i)}: {tasks_mod.PHASE_EXIT[i]}",
+                    f"  - {tasks_mod.phase_name(i)}: {exit_gate(i)}",
                     file=sys.stderr,
                 )
             print(
@@ -1233,14 +1254,14 @@ def cmd_phase_set(args, root: Path):
             {
                 "phase": args.phase,
                 "phase_name": tasks_mod.phase_name(args.phase),
-                "exit_gate": tasks_mod.PHASE_EXIT[args.phase],
+                "exit_gate": exit_gate(args.phase),
                 "forced": args.force,
                 "gate": gate,
             }
         )
         return 0
     print(ui.colorize(f"✓ phase → {tasks_mod.phase_name(args.phase)}", ui.GREEN))
-    print(f"  exit gate: {tasks_mod.PHASE_EXIT[args.phase]}")
+    print(f"  exit gate: {exit_gate(args.phase)}")
     return 0
 
 
@@ -1251,6 +1272,24 @@ def cmd_plan_import(args, root: Path):
         ui.json_out(added)
         return 0
     if not added:
+        plan = paths.artifact_path(root, "PLAN.md")
+        text = plan.read_text(encoding="utf-8") if plan.exists() else ""
+        if text.strip() and not tasks_mod.parse_plan_steps(text):
+            print(
+                ui.colorize(
+                    "No steps recognised in PLAN.md — nothing imported.", ui.YELLOW
+                )
+            )
+            print(
+                ui.colorize(
+                    "  A step is any of: a heading with an id (`## S07 — title`), a heading of\n"
+                    "  level 3+ (`### title`), a numbered line (`1. title`), or a bullet at\n"
+                    "  column 0 (`- title`). Bullets inside a step become its subtasks;\n"
+                    "  `owner:` `deliverable:` `verify:` `risk:` `depends on:` are optional.",
+                    ui.DIM,
+                )
+            )
+            return 0
         print(
             ui.colorize(
                 "PLAN.md and the board agree (nothing to import or update).", ui.DIM
@@ -1259,7 +1298,8 @@ def cmd_plan_import(args, root: Path):
     for t in added:
         mark = "+" if t.get("action") == "added" else "~"
         fields = f"  [{', '.join(t['fields'])}]" if t.get("fields") else ""
-        print(f"  {ui.colorize(mark, ui.GREEN)} {t['id']} — {t['title']}{fields}")
+        subs = f"  {t['subtasks']} subtasks" if t.get("subtasks") else ""
+        print(f"  {ui.colorize(mark, ui.GREEN)} {t['id']} — {t['title']}{fields}{subs}")
     return 0
 
 

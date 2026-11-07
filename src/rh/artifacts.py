@@ -137,22 +137,39 @@ ARTIFACTS: dict[str, dict] = {
                    "command, dependencies and risk. Nothing is implemented before the user "
                    "approves this file.",
         "location": "PLAN.md",
-        "owner": "the two Planners agree; the Orchestrator merges; the user approves",
+        "owner": "the two Planners agree; the Orchestrator merges; the user approves — with no "
+                 "planner configured (`agents.planners.models = none`) the user writes it and "
+                 "the Orchestrator reconciles it",
         "phase": "4 PLAN (re-opened by replanning from 6/7)",
         "sections": [
-            "### S<N> — <action> — one step per heading (ids like S04b are valid)",
-            "step fields: owner · deliverable · verify · depends on · risk · kind (build|spike) · timebox",
+            "### S<N> — <action> — one step per heading (ids like S04b are valid); a general "
+            "Markdown plan is accepted too (see rules)",
+            "step fields (all optional): owner · deliverable · verify · depends on · risk · "
+            "kind (build|spike) · timebox",
+            "subtasks — bullet lines under a step (`- [ ] profile one cell`)",
             "tooling — link .rh/ENVIRONMENT.md, never copy its versions",
-            "agreement line — `agreed by <model> / <model> on <date>`",
+            "agreement line — `agreed by <model> / <model> on <date>` (waived where the user plans)",
         ],
         "template": "### S07 — <action>\nowner: researcher | deliverable: results/S07.csv\n"
                     "verify: `uv run pytest tests/test_s07.py`\ndepends on: S05 | risk: <what could "
-                    "invalidate it> | kind: build | spike\ntimebox: 90m   # only for kind: spike",
+                    "invalidate it> | kind: build | spike\ntimebox: 90m   # only for kind: spike\n"
+                    "- subtask one\n- [ ] subtask two",
         "rules": [
             "Two planners on different models agree, then the user approves (gates.user_approves_plan).",
             "Every step needs a verification command or check — \"looks right\" is not one.",
             "Replanning edits this file first, then `rh plan import` refreshes the board.",
             "`rh plan import` treats this file as truth: a retired title does not survive on the board.",
+            "Shapes accepted, first one found wins: a heading with an id (`## S07 — x`) · any "
+            "level>=3 heading · a numbered heading (`## 1. x`) when no level>=3 exists · a "
+            "numbered line (`1. x`) · a bullet at column 0 (`- x`). A heading that is not a step "
+            "is a section boundary.",
+            "Bullets inside a step are its subtasks; re-import appends new ones and never deletes "
+            "or resets one. Task state is never touched by an import.",
+            "Who keeps the board in sync: an agent that writes this file imports its own steps; a "
+            "user-written plan is imported by the Orchestrator.",
+            "No planner configured (`rh env set agents.planners.models=none`) means the user is "
+            "the planner: the phase-4 gate reads user-authored + user approval, `rh doctor` and "
+            "`rh env show` say so, and no planner pane is ever opened.",
         ],
         "consumers": "tasks.json (`rh plan import`), STATUS.md, MANUSCRIPT.md",
     },

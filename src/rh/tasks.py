@@ -177,9 +177,33 @@ class TaskStore:
 
 
 # --- PLAN.md <-> tasks import -------------------------------------------------
+#
+# PLAN.md is the user's file (or an agent's), so the parser is forgiving about shape and
+# strict only about the fields it actually uses. Step lines are recognised in this order
+# of preference — first shape found in the file wins, so a plan is never half-guessed:
+#
+#   1. a heading carrying an explicit id, at any level   ## S07 — Dispersion screen
+#   2. any heading at level >= 3                         ### Dispersion screen
+#   3. a numbered heading, when no level>=3 heading exists  ## 1. Dispersion screen
+#   4. a numbered line at column 0                       1. Dispersion screen
+#   5. a bullet at column 0                              - Dispersion screen
+#
+# A heading that is not a step is a **section boundary**: it ends the current step and
+# starts nothing (`## 1. What works` never becomes a task). Bullet lines inside a step are
+# its **subtasks** (`- [ ] profile one cell` or `  - profile one cell`), except in the
+# bullet shape where column-0 bullets are the steps and only indented ones are subtasks.
+# Steps without an explicit id get a positional one (`S01`, `S02`, …).
+#
+# Fields read from the step body, all optional: `owner:` `deliverable:` `verify:` `risk:`
+# `depends on:` `kind:` `timebox:`.
 
-# `### S04b — title` / `### S12 - title` / `### T-abc — title`
-PLAN_STEP = re.compile(r"^###\s+((?:S\d+[a-zA-Z]?|T-\S+))\s*[—–-]\s*(.+)$", re.MULTILINE)
+_EXPLICIT_ID = re.compile(r"^(S\d+[a-zA-Z]?|T-\S+)\s*[—–:.\-]\s*(.+)$")
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_NUMBERED = re.compile(r"^(\d{1,3})[.)]\s+(.+?)\s*$")
+_NUMBERED_ANY = re.compile(r"^(?:\d{1,3}[.)]|step\s+\d+\s*[:.)])\s+(.+?)\s*$", re.IGNORECASE)
+_BULLET = re.compile(r"^[-*+]\s+(?:\[([ xX])\]\s*)?(.+?)\s*$", re.MULTILINE)
+_BULLET_ANY = re.compile(r"^\s*[-*+]\s+(?:\[([ xX])\]\s*)?(.+?)\s*$", re.MULTILINE)
+_INDENTED_BULLET = re.compile(r"^\s+[-*+]\s+(?:\[([ xX])\]\s*)?(.+?)\s*$", re.MULTILINE)
 
 # Exit gate text per phase (SKILL.md §3) — shown by `rh phase`, never enforced alone.
 PHASE_EXIT = {
@@ -196,33 +220,120 @@ PHASE_EXIT = {
 }
 
 
-def _step_blocks(text: str) -> list[tuple[str, str, str]]:
-    """[(step_id, title, body)] — a step's body ends at the next heading."""
-    starts = [(m.group(1), m.group(2).strip(), m.start(), m.end())
-              for m in PLAN_STEP.finditer(text)]
+def phase_exit(phase: int, user_plans: bool = False) -> str:
+    """The phase's exit gate, as text.
+
+    Phase 4 names its author: with no planner configured the user is the planner
+    (`agents.planners.models = []` / `none`), so the gate is user-authored + user
+    approval rather than two planners plus the user.
+    """
+    if phase == 4 and user_plans:
+        return (
+            "PLAN.md: written by the user (no planner models configured) + user approval"
+        )
+    return PHASE_EXIT.get(phase, "")
+
+
+def _clean_title(title: str) -> str:
+    """Bold/italic markers and whitespace only — inner backticks belong to the title."""
+    return title.strip().strip("*_ ").strip()
+
+
+def _step_starts(text: str) -> tuple[str, list[tuple[int, str, str]]]:
+    """(shape, [(line_index, id_or_empty, title)]).
+
+    `shape` is "heading", "numbered", "bullet" or "none" — it decides whether a
+    column-0 bullet is a step (bullet shape) or a subtask (everything else).
+    """
+    lines = text.splitlines()
+    headings: list[tuple[int, int, str]] = []
+    numbered: list[int] = []
+    bulleted: list[int] = []
+    for i, line in enumerate(lines):
+        m = _HEADING.match(line)
+        if m:
+            headings.append((i, len(m.group(1)), m.group(2)))
+            continue
+        if line and not line[0].isspace():
+            if _NUMBERED.match(line):
+                numbered.append(i)
+            elif _BULLET.match(line):
+                bulleted.append(i)
+
+    ided = []
+    plain = []
+    for i, level, body in headings:
+        m = _EXPLICIT_ID.match(body)
+        if m:
+            ided.append((i, m.group(1), _clean_title(m.group(2))))
+        elif level >= 3:
+            plain.append((i, "", _clean_title(body)))
+    if ided or plain:
+        return "heading", sorted(ided + plain)
+    # No level>=3 step headings: a numbered heading (`## 1. Dispersion screen`) is the step
+    # list, and its bullets are subtasks. This is how a hand-written plan usually looks.
+    numbered_headings = []
+    for i, _level, body in headings:
+        m = _NUMBERED_ANY.match(body)
+        if m:
+            numbered_headings.append((i, "", _clean_title(m.group(1))))
+    if numbered_headings:
+        return "heading", numbered_headings
+    if numbered:
+        return "numbered", [(i, "", _clean_title(_NUMBERED.match(lines[i]).group(2)))
+                             for i in numbered]
+    if bulleted:
+        return "bullet", [(i, "", _clean_title(_BULLET.match(lines[i]).group(2)))
+                           for i in bulleted]
+    return "none", []
+
+
+def _step_blocks(text: str) -> list[tuple[str, str, str, list[str]]]:
+    """[(step_id, title, body, subtasks)] — positional ids when the plan carries none."""
+    shape, starts = _step_starts(text)
+    if not starts:
+        return []
+    lines = text.splitlines()
+    stop_lines = {i for i, line in enumerate(lines) if _HEADING.match(line)}
+    stop_lines |= {i for i, _id, _title in starts}
+    sub_re = _INDENTED_BULLET if shape == "bullet" else _BULLET_ANY
+
     blocks = []
-    for i, (step_id, title, _start, body_start) in enumerate(starts):
-        end = starts[i + 1][2] if i + 1 < len(starts) else len(text)
-        nxt = re.search(r"^##\s", text[body_start:end], re.MULTILINE)
-        if nxt:
-            end = body_start + nxt.start()
-        blocks.append((step_id, title, text[body_start:end]))
+    used: set[str] = set()
+    for n, (start, step_id, title) in enumerate(starts, start=1):
+        positional = f"S{n:02d}"
+        step_id = step_id or positional
+        if step_id in used:
+            step_id = positional if positional not in used else f"{positional}-{n}"
+        used.add(step_id)
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            if j in stop_lines:
+                end = j
+                break
+        body_lines = lines[start + 1:end]
+        body = "\n".join(body_lines)
+        subtasks = [_clean_title(m.group(2)) for m in sub_re.finditer(body)
+                    if m.group(2).strip()]
+        blocks.append((step_id, title, body, subtasks))
     return blocks
 
 
 def _field(body: str, pattern: str) -> str:
-    m = re.search(pattern, body)
+    """A step field, case-insensitive — a hand-written plan says `Owner:` as often as `owner:`."""
+    m = re.search(pattern, body, re.IGNORECASE)
     return (m.group(1).strip().strip("`") if m else "")
 
 
 def parse_plan_steps(text: str, default_phase: int = 4) -> list[dict]:
-    """Parse PLAN.md steps (SKILL.md §8 template) into task dicts."""
+    """Parse PLAN.md into task dicts — see the shape rules above the regexes."""
     out = []
-    for step_id, title, body in _step_blocks(text):
+    for step_id, title, body, subtasks in _step_blocks(text):
         deps = _field(body, r"depends on:\s*([^|\n]+)")
         out.append({
             "id": step_id,
             "title": title,
+            "subtasks": subtasks,
             "owner": _field(body, r"owner:\s*([\w-]+)"),
             "deliverable": (_field(body, r"deliverable:\s*`([^`]+)`")
                             or _field(body, r"deliverable:\s*([^|\n]+)")),
@@ -237,12 +348,25 @@ def parse_plan_steps(text: str, default_phase: int = 4) -> list[dict]:
     return out
 
 
+def _next_subtask_id(task: dict) -> int:
+    """Highest `parent.N` suffix already used, so appended subtasks never reuse an id."""
+    top = 0
+    for st in task.get("subtasks", []):
+        _parent, _sep, suffix = str(st.get("id", "")).rpartition(".")
+        if suffix.isdigit():
+            top = max(top, int(suffix))
+    return top + 1
+
+
 def import_plan_md(root: Path, dry_run: bool = False) -> list[dict]:
     """Parse PLAN.md steps into tasks; existing ids get their fields refreshed.
     Read-only for PLAN.md: this function never writes PLAN.md (user file stays put).
 
     PLAN.md is the truth (SKILL.md §10 contract 3): a retired title must not
-    survive on the board. Task state/subtasks are never touched here.
+    survive on the board. Fields are refreshed; **state is never touched**. Subtasks
+    are matched by title and only ever appended — a subtask that disappears from
+    PLAN.md keeps its row and its state, because deleting it would delete evidence of
+    work done.
     """
     plan = paths.artifact_path(root, "PLAN.md")
     if not plan.exists():
@@ -253,29 +377,44 @@ def import_plan_md(root: Path, dry_run: bool = False) -> list[dict]:
     changed = []
     for step in parse_plan_steps(plan.read_text(encoding="utf-8")):
         step_id = step.pop("id")
+        subtasks = step.pop("subtasks")
         task = existing.get(step_id)
         if task is None:
             if dry_run:
-                changed.append({"id": step_id, "title": step["title"], "action": "added"})
+                row = {"id": step_id, "title": step["title"], "action": "added"}
+                if subtasks:
+                    row["subtasks"] = len(subtasks)
+                changed.append(row)
             else:
                 task = store.add(step["title"], task_id=step_id, phase=step["phase"],
                                  owner=step["owner"] or "researcher",
                                  deliverable=step["deliverable"], verify=step["verify"],
                                  kind=step["kind"] or "build", timebox=step["timebox"],
-                                 risk=step["risk"], depends_on=step["depends_on"])
+                                 risk=step["risk"], depends_on=step["depends_on"],
+                                 subtasks=subtasks)
                 existing[step_id] = task
                 data["tasks"].append(task)  # keep the snapshot we save at the end consistent
-                changed.append({"id": step_id, "title": task["title"], "action": "added"})
+                row = {"id": step_id, "title": task["title"], "action": "added"}
+                if subtasks:
+                    row["subtasks"] = len(subtasks)
+                changed.append(row)
             continue
         updates = {k: v for k, v in step.items() if k != "phase" and v and task.get(k) != v}
-        if not updates:
+        known = {st["title"] for st in task.get("subtasks", [])}
+        fresh = [title for title in subtasks if title not in known]
+        if not updates and not fresh:
             continue
         if not dry_run:
             for k, v in updates.items():
                 task[k] = v
+            nxt = _next_subtask_id(task)
+            for offset, title in enumerate(fresh):
+                task.setdefault("subtasks", []).append(
+                    {"id": f"{step_id}.{nxt + offset}", "title": title, "state": "idle"})
             task["updated_at"] = now_iso()
+        fields = sorted(updates) + (["subtasks"] if fresh else [])
         changed.append({"id": step_id, "title": task["title"], "action": "updated",
-                        "fields": sorted(updates)})
+                        "fields": fields})
     if changed and not dry_run:
         store.save(data)
     return changed

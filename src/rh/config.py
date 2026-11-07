@@ -52,7 +52,12 @@ DEFAULT_ENV: dict = {
         "paywall": "ask_user",  # ask_user | skip
         "search": "crw",  # crw | agent-browser | obscura | <binary>
     },
-    "project": {"name": "", "git": False},
+    "project": {
+        "name": "",
+        "git": False,
+        # the software this project actually runs: [{name, version, note}]
+        "environment": [],
+    },
     "gates": {"user_approves_plan": True, "critique_veto": True},
 }
 
@@ -148,17 +153,36 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
         "provider+model(+thinking) for the Writer role",
     ),
     (
+        "agents.planners.models",
+        "list",
+        ("none",),
+        "planner models — `none` (or `0`) means no planner is configured and **the user "
+        "plans**; phase 4 is then user-authored + user approval",
+    ),
+    (
         "agents.planners.models.0",
         "dict",
         (),
         "planner 1 model (must differ from planner 2)",
     ),
-    ("agents.planners.models.1", "dict", (), "planner 2 model"),
+    (
+        "agents.planners.models.1",
+        "dict",
+        (),
+        "planner 2 model",
+    ),
     (
         "agents.planners.max_rounds",
         "int",
         (0, 1, 2, 3, 5),
         "0 = cap at 3 rounds, then escalate",
+    ),
+    (
+        "project.environment",
+        "list",
+        (),
+        "project environment: JSON list of {name, version, note} — the software this "
+        "project actually runs; printed by `rh env show`, cited by Methods",
     ),
     (
         "literature.ref_manager",
@@ -307,15 +331,21 @@ def set_nested(d: dict, dotted: str, value) -> None:
         cur[last] = value
 
 
-def coerce_value(raw: str, kind: str):
+def coerce_value(raw: str, kind: str, key: str = ""):
     raw = raw.strip()
     if kind == "int":
         return int(raw)
     if kind == "list":
+        # `none` / `0` / `[]` on the planners list means nobody is configured to plan:
+        # the user is the planner (SKILL.md §3 phase 4 waived).
+        if key.endswith("planners.models") and raw.lower() in ("none", "0", "[]", "-"):
+            return []
         if raw.startswith("["):
             v = json.loads(raw)
             if not isinstance(v, list):
                 raise ValueError(f"expected JSON list, got {raw!r}")
+            if any(isinstance(x, dict) for x in v):
+                return v  # object entries (e.g. a project tool) pass through untouched
             return [str(x).strip() for x in v if str(x).strip()]
         return [x.strip() for x in raw.split(",") if x.strip()]
     if kind == "bool":
@@ -339,6 +369,22 @@ def coerce_value(raw: str, kind: str):
     return raw
 
 
+def planner_models(env: dict) -> list[dict]:
+    """The configured planner models — entries that are not model objects are ignored."""
+    models = ((env.get("agents") or {}).get("planners") or {}).get("models") or []
+    return [m for m in models if isinstance(m, dict) and m]
+
+
+def user_plans(env: dict) -> bool:
+    """True when no planner is configured, i.e. **the user is the planner**.
+
+    `agents.planners.models` empty (`[]`, or set with `none` / `0`) means phase 4 is
+    user-authored: the user writes PLAN.md, the Orchestrator reconciles it, the user
+    approves it. `rh phase`, `rh doctor`, `rh env show` and `rh info PLAN.md` say so.
+    """
+    return not planner_models(env)
+
+
 def validate(env: dict) -> list[str]:
     """Return list of problems (empty = valid)."""
     problems = []
@@ -354,13 +400,30 @@ def validate(env: dict) -> list[str]:
             f"agents.backend must be one of {AGENT_BACKENDS}, got {backend!r}"
         )
     planners = env.get("agents", {}).get("planners", {}).get("models", [])
-    if (
+    if not isinstance(planners, list):
+        problems.append(f"agents.planners.models must be a list, got {planners!r}")
+    elif any(not isinstance(m, dict) for m in planners):
+        problems.append(
+            "agents.planners.models holds something that is not a model object — "
+            "use `none` for 'the user plans' (writes `[]`)"
+        )
+    elif (
         len(planners) >= 2
         and planners[0]
         and planners[1]
         and planners[0] == planners[1]
     ):
         problems.append("agents.planners.models must be two different models")
+    tools = env.get("project", {}).get("environment", [])
+    if not isinstance(tools, list):
+        problems.append(f"project.environment must be a list, got {tools!r}")
+    else:
+        for i, tool in enumerate(tools):
+            if not isinstance(tool, dict) or not str(tool.get("name", "")).strip():
+                problems.append(
+                    f"project.environment[{i}] must be an object with a name — "
+                    'e.g. {"name": "numpy", "version": "2.3.5", "note": "arrays"}'
+                )
     name = env.get("project", {}).get("name", "")
     if name is not None and not isinstance(name, str):
         problems.append(f"project.name must be a string, got {name!r}")
@@ -646,7 +709,10 @@ def phase_gate(root: Path, env: dict | None = None) -> dict:
     done[4] = plan.exists() and plan.stat().st_size > 0
     if current >= 6 and not done[4]:
         problems.append(
-            "phase 4 PLAN artifact missing: PLAN.md (two planners + user approval)"
+            "phase 4 PLAN artifact missing: PLAN.md ("
+            + ("user-authored + user approval" if user_plans(env)
+               else "two planners + user approval")
+            + ")"
         )
     status = paths.artifact_path(root, "STATUS.md")
     done[5] = status.exists() and status.stat().st_size > 0

@@ -55,6 +55,15 @@ def check(root: Path, env: dict | None = None) -> dict:
     count = (env.get("agents") or {}).get("count")
     add("count", count in (1, 2, 3, 4), f"agents.count = {count!r}")
 
+    # planners: none configured means the user is the planner (phase 4 is user-authored)
+    models = config.planner_models(env)
+    if models:
+        names = " / ".join(f"{m.get('provider', '?')}/{m.get('model', '?')}" for m in models)
+        add("planners", len(models) >= 2 or True, f"planners: {names}")
+    else:
+        add("planners", True,
+            "planners: none — the user plans; phase 4 is user-authored + user approval")
+
     # per-role commands: template present, splittable, has {agent_file}, role file exists
     cmds = (env.get("agents") or {}).get("commands") or {}
     if not isinstance(cmds, dict):

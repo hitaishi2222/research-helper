@@ -1,8 +1,12 @@
 """Task board — openspec-inspired but single-file (.rh/tasks.json).
 
 Avoids spec bloat: one JSON file, phases + steps + subtasks, states
-idle | working | complete. PLAN.md steps are mirrored here so `rh tasks`
-and `rh status` have a machine-readable source.
+idle | working | complete | cancelled. PLAN.md steps are mirrored here so
+`rh tasks` and `rh status` have a machine-readable source.
+
+`cancelled` is the research-death state: a later step proved the plan wrong, so
+the task is deliberately dropped. It counts as *resolved* (progress bar) but
+never as done.
 """
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from pathlib import Path
 
 from . import paths
 
-TASK_STATES = ("idle", "working", "complete")
+TASK_STATES = ("idle", "working", "complete", "cancelled")
 PHASES = [
     (0, "CONFIG"),
     (1, "INTAKE"),
@@ -160,6 +164,7 @@ class TaskStore:
         total = len(tasks)
         complete = sum(1 for t in tasks if t["state"] == "complete")
         working = sum(1 for t in tasks if t["state"] == "working")
+        cancelled = sum(1 for t in tasks if t["state"] == "cancelled")
         subtasks_total = sum(len(t.get("subtasks", [])) for t in tasks)
         subtasks_complete = sum(
             1 for t in tasks for s in t.get("subtasks", []) if s["state"] == "complete"
@@ -168,11 +173,13 @@ class TaskStore:
             "total": total,
             "complete": complete,
             "working": working,
-            "idle": total - complete - working,
+            "cancelled": cancelled,
+            "idle": total - complete - working - cancelled,
             "subtasks_total": subtasks_total,
             "subtasks_complete": subtasks_complete,
             "current_phase": int(data.get("current_phase", 0)),
-            "pct": round(100 * complete / total) if total else 0,
+            # cancelled tasks are resolved (decided against), so they unblock the bar
+            "pct": round(100 * (complete + cancelled) / total) if total else 0,
         }
 
 

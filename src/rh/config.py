@@ -48,6 +48,7 @@ DEFAULT_ENV: dict = {
     },
     "literature": {
         "ref_manager": "none",  # zot | bibtex | none
+        "library": "none",  # PDF library / arXiv download tool: papr | zot | none
         "reading": "pdftotext",  # lit | pdftotext | images
         "paywall": "ask_user",  # ask_user | skip
         "search": "crw",  # crw | agent-browser | obscura | <binary>
@@ -195,6 +196,13 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
         "str",
         (),
         "reader the user names (e.g. lit, pdftotext, images)",
+    ),
+    (
+        "literature.library",
+        "str",
+        (),
+        "PDF library / arXiv download tool the user names (e.g. papr, zot, none) — "
+        "papr is a TUI: library, arXiv download, manuscript",
     ),
     (
         "literature.paywall",
@@ -431,7 +439,7 @@ def validate(env: dict) -> list[str]:
         problems.append("project.name must be a single line")
     lit = env.get("literature", {})
     # tool names are whatever the user names — never restricted to a known list
-    for key in ("ref_manager", "reading", "search"):
+    for key in ("ref_manager", "library", "reading", "search"):
         val = lit.get(key)
         if not isinstance(val, str) or not val.strip():
             problems.append(

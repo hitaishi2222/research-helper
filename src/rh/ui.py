@@ -76,11 +76,15 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def state_color(state: str) -> str:
-    return {"complete": GREEN, "working": CYAN, "idle": DIM}.get(state, "")
+    return {"complete": GREEN, "working": CYAN, "idle": DIM, "cancelled": RED}.get(
+        state, ""
+    )
 
 
 def state_label(state: str) -> str:
-    dot = {"complete": "●", "working": "◐", "idle": "○"}.get(state, "?")
+    dot = {"complete": "●", "working": "◐", "idle": "○", "cancelled": "⊘"}.get(
+        state, "?"
+    )
     return colorize(f"{dot} {state}", state_color(state))
 
 

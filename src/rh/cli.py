@@ -209,7 +209,7 @@ def cmd_init(args, root: Path):
     elif not (env.get("project") or {}).get("name"):
         env.setdefault("project", {})["name"] = default_name
     for key, val in answers.items():
-        if key == "harness" or not key.startswith(("agents.", "project.")):
+        if key == "harness":  # applied separately, below
             continue
         try:
             config.set_nested(
@@ -477,6 +477,26 @@ def _init_questionnaire(args, root: Path) -> tuple[dict[str, str], list[str]]:
                 )
                 for name in harnesses
             ],
+        },
+        {
+            "key": "literature.library",
+            "title": "PDF library / arXiv downloads?",
+            "help": "papr manages papers and writes the manuscript from the same TUI",
+            "default": str((env.get("literature") or {}).get("library") or "none"),
+            "options": [
+                (
+                    name,
+                    f"{name}  "
+                    + ("✓ on PATH" if shutil.which(name) else "— not found")
+                    + f" · {what}",
+                )
+                for name, what in (
+                    ("papr", "TUI: paper library, arXiv download, manuscript"),
+                    ("zot", "Zotero CLI"),
+                    ("lit", "liteparse: PDF text out"),
+                )
+            ]
+            + [("none", "none — keep papers/ by hand"), (None, "other — type it")],
         },
     ]
 
@@ -798,13 +818,17 @@ def group_tasks(tasks):
     ]
     active = [t for t in tasks if t["state"] == "working"]
     complete = [t for t in tasks if t["state"] == "complete"]
+    cancelled = [t for t in tasks if t["state"] == "cancelled"]
     remaining = [
-        t for t in tasks if t not in draft and t not in active and t not in complete
+        t
+        for t in tasks
+        if t not in draft and t not in active and t not in complete and t not in cancelled
     ]
     return {
         "draft": draft,
         "active": active,
         "complete": complete,
+        "cancelled": cancelled,
         "remaining": remaining,
     }
 
@@ -836,6 +860,7 @@ def cmd_tasks(args, root: Path):
     print(
         f"{ui.bar(summary['pct'])}  {summary['complete']}/{summary['total']} tasks complete · "
         f"{summary['working']} working · {summary['idle']} idle"
+        + (f" · {summary['cancelled']} cancelled" if summary["cancelled"] else "")
     )
     if summary["subtasks_total"]:
         sc = summary["subtasks_complete"]
@@ -859,45 +884,7 @@ def cmd_tasks(args, root: Path):
             )
         )
         return 0
-    # openspec view style: grouped lanes, one row per task, [x]/[ ] checklist
-    for label, items in (
-        ("Draft", groups["draft"]),
-        ("Active", groups["active"]),
-        ("Complete", groups["complete"]),
-        ("Remaining", groups["remaining"]),
-    ):
-        if not items:
-            continue
-        print(ui.colorize(f"── {label} ({len(items)}) ──", ui.BOLD))
-        for t in items:
-            box = (
-                "[x]"
-                if t["state"] == "complete"
-                else "[ ]"
-                if t["state"] == "idle"
-                else "[~]"
-            )
-            box = ui.colorize(box, ui.state_color(t["state"]))
-            sub = ""
-            if t.get("subtasks"):
-                sd = sum(1 for s in t["subtasks"] if s["state"] == "complete")
-                stot = len(t["subtasks"])
-                sub = f"  [{sd}/{stot} subtasks]"
-            print(f"  {box} {ui.colorize(t['id'], ui.CYAN):8} {t['title']}{sub}")
-            for st in t.get("subtasks", []):
-                sbox = (
-                    "[x]"
-                    if st["state"] == "complete"
-                    else "[~]"
-                    if st["state"] == "working"
-                    else "[ ]"
-                )
-                print(
-                    f"        {ui.colorize(sbox, ui.state_color(st['state']))} "
-                    f"{st['id']:9} {st['title']}"
-                )
-        print()
-    # flat table for scripting detail
+    # one flat table — the state column replaces the old Draft/Active/Complete lanes
     rows = [
         [
             t["id"],
@@ -951,6 +938,7 @@ def cmd_status(args, root: Path):
     print(
         f"{ui.bar(summary['pct'], width=24)}  {summary['complete']}/{summary['total']} tasks · "
         f"{summary['working']} working · {summary['idle']} idle"
+        + (f" · {summary['cancelled']} cancelled" if summary["cancelled"] else "")
     )
     print()
     # per-phase progress only — the task/subtask detail lives in `rh tasks`
@@ -978,7 +966,10 @@ def cmd_status(args, root: Path):
     else:
         for phase in sorted(by_phase):
             phase_tasks = by_phase[phase]
-            done = sum(1 for t in phase_tasks if t["state"] == "complete")
+            # cancelled counts as resolved here, same as the overall bar
+            done = sum(
+                1 for t in phase_tasks if t["state"] in ("complete", "cancelled")
+            )
             working = [t["id"] for t in phase_tasks if t["state"] == "working"]
             bar_pct = round(100 * done / len(phase_tasks)) if phase_tasks else 0
             now = f" · working: {', '.join(working)}" if working else ""

@@ -61,7 +61,8 @@ rh init --dry-run                # preview without writing anything, not even th
 rh init --force                  # archive a copy of env.json/tasks.json to .rh/.bak/ before writing
 rh init --clean                   # archive the whole .rh/ (event logs, notes) then recreate it
 rh env set agents.count=2 agents.backend=tmux agents.cli=pi \
-  agents.skills=research-helper,crw literature.search=crw project.git=true
+  agents.skills=research-helper,crw literature.search=crw \
+  literature.library=papr project.git=true
 rh env show                 # config as a table, validated
 rh phase 4                  # gated: refuses to skip unmet exits
 rh phase                    # what the current phase still needs
@@ -91,17 +92,17 @@ A tool on `PATH` does not mean this project should use it.
 | `rh add layout <heading> [-m BODY]` | append to `OUTPUT_LAYOUT.md` (patterns + our layout) |
 | `rh add gaps\|problem\|plan\|status\|manuscript <heading> [-m BODY]` | same for the other artifacts |
 | `rh add log --role R --title T [-m BODY]` | §7 log file |
-| `rh add task "title" [--id S01] [--phase N] [--owner ROLE] [--state idle\|working\|complete] [--verify CMD] [--deliverable FILE] [--depends-on S01,S02] [--kind build\|spike]` | add a board task |
+| `rh add task "title" [--id S01] [--phase N] [--owner ROLE] [--state idle\|working\|complete\|cancelled] [--verify CMD] [--deliverable FILE] [--depends-on S01,S02] [--kind build\|spike]` | add a board task |
 | `rh search <query> [--max N]` | rg-first local search over `.rh/` + artifacts |
-| `rh tasks set <id> <idle\|working\|complete>` | change a task or subtask state |
-| `rh tasks [--phase N] [--state S]` | every task + subtask + status, lanes, progress bars |
+| `rh tasks set <id> <idle\|working\|complete\|cancelled>` | change a task or subtask state (`cancelled` = plan killed by a later finding) |
+| `rh tasks [--phase N] [--state S]` | every task + subtask, state, progress bars |
 | `rh status` | header, phase rail, per-phase progress |
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
 | `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh resume` / `rh -r` | run the orchestrator **in this terminal** — command from `agents.commands.orchestrator` (wiring `.rh/agents/orchestrator.md` in as the system prompt), only `agents.skills` loaded; opens with the skill read and does not echo the prompt |
 | `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |
-| `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` scaffolds a missing one |
+| `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` creates a missing one (starters ship populated) |
 | `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
 | `rh describe [--json]` | the AI map: layout, phases, env keys, artifacts, spawn, budget |
@@ -153,7 +154,7 @@ State lives in plain files, not a database:
   .rh/                env.json, ENVIRONMENT.md, CHECKLIST.md, agents/, logs, tasks
   src/                implementation
   results/            every number + the script that produced it
-  papers/             downloaded PDFs (kept, never deleted by rh)
+  papers/             downloaded PDFs (papr/Zotero or by hand; kept, never deleted by rh)
   PROBLEM.md          goal, scope, success criteria, falsifier
   OUTPUT_LAYOUT.md    output skeleton + patterns from comparable papers
   PLAN.md             approved steps

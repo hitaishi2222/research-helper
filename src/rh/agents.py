@@ -2,8 +2,10 @@
 
 There is no hardcoded role info anywhere in `rh`. Each role's rules and scope
 live only in its `.rh/agents/<role>.md` file. `rh` never invents role scope beyond
-a starter file: the orchestrator starter carries the SKILL.md §5 contract (it is
-the head of the project), the other roles get a minimal scaffold to fill in.
+a starter file: every starter carries the SKILL.md §5 row for that role — the
+job and its boundary, generalized — so a fresh `rh init` produces usable role
+files. Project facts (paths, tools, phases, output names) stay out of them: the
+TAILOR block in each file tells the Orchestrator to narrow it with the user.
 
 How a role file reaches the agent:
 
@@ -38,8 +40,8 @@ from pathlib import Path
 
 from . import paths
 
-# Starter roles `rh init` writes. Only the orchestrator starter carries a
-# contract (SKILL.md §5); the rest are scaffolds the Orchestrator fills in.
+# Starter roles `rh init` writes. Every one carries its SKILL.md §5 scope; the
+# Orchestrator narrows it for the project with user approval.
 STARTER_ROLES = (
     "orchestrator",
     "literature",
@@ -97,32 +99,104 @@ wires this file into the harness's system-prompt area with {agent_file}.
 """
 
 
-def default_content(role: str) -> str:
-    """Starter content for a role file. The Orchestrator fills the rest in with the user."""
-    role = (role or "").strip().lower()
-    if role == "orchestrator":
-        return ORCHESTRATOR_CONTENT
-    return f"""# {role.upper()} agent
-
-Role: <what this agent is for — one sentence>
-
-Owns: <artifacts and directories this role may write>
-May: <what this role may do>
-May not: <what this role must not do>
-
+ROLE_FOOTER = """
 Rules carried into every session:
-- follow the research-helper skill exactly (SKILL.md §0 non-negotiables);
-- ask before every state-changing action;
+- load the research-helper skill first; SKILL.md §0 (non-negotiables) binds you;
+- ask before every state-changing action; skip nothing from SKILL.md §6;
+- write only inside the files this role owns — everything else is read-only;
 - report back with files changed, evidence (command + number), and needs;
 - never update STATUS.md unless you are the Orchestrator.
 
-Edit this file with user approval. The launch command for this role
-lives in .rh/env.json as agents.commands.<role>; `rh spawn <role>`
-uses exactly that command. Wire this file into the harness's
-system-prompt area in that command with {{agent_file}}, e.g.
-`--append-system-prompt {{agent_file}}` (never a replacing flag), and pass the
-prompt positionally with {{prompt}} (or the harness equivalent).
+The launch command for this role lives in `.rh/env.json` as
+agents.commands.{role}; `rh spawn {role}` uses exactly that command and wires
+this file into the harness's system-prompt area with {{agent_file}}. If the
+command has no {{agent_file}} slot, say so — the role file is not being read.
 """
+
+# SKILL.md §5's role table, generalized: the job and its boundary, never project
+# facts. Paths, tools, phases and output names differ per project, so the
+# Orchestrator narrows them with the user — every starter carries TAILOR to say so.
+ROLE_SCOPE = {
+    "literature": (
+        "reads the sources and records what we take from them — the only role that may "
+        "call a source 'read'.",
+        "the project's source library and literature record (paths: SKILL.md §1)",
+        "fetch open-access sources, read them, record what we take and what we do not, "
+        "propose the layout of the output the user asked for",
+        "summarize a source it has not read, substitute one reference for another, or "
+        "change the plan",
+    ),
+    "researcher": (
+        "implements and measures — work in, numbers out.",
+        "the project's implementation and result files (paths: SKILL.md §1)",
+        "implement, test, run experiments, probe the tools the environment record names, "
+        "ask for guidance when the plan does not fit reality",
+        "change scope, delete files it did not create, install system packages, weaken a "
+        "test, or report a number it did not measure",
+    ),
+    "reviewer": (
+        "independent review of work it did not produce — findings, never fixes.",
+        "its own review verdicts",
+        "read everything, reproduce what it can, file findings ranked by severity, demand "
+        "evidence (file and line, command and number)",
+        "fix what it finds, accept an unreproduced claim, or soften a finding to keep the "
+        "peace — independence is the whole point",
+    ),
+    "critique": (
+        "the blocking-question list and the veto — the role that must try to kill the "
+        "work.",
+        "the blocking-question list it hands to the Orchestrator",
+        "question anything, block a gate, demand falsification (which result would prove "
+        "this wrong?), name what the work assumes without testing",
+        "implement, soften its own findings, or block without naming what would settle it",
+    ),
+    "writer": (
+        "the written output — claims, prose and figures that already exist as evidence.",
+        "the project's manuscript or report file (path: SKILL.md §1)",
+        "draft, restructure, cite from the project's own results and literature record",
+        "introduce evidence the project does not have, invent a citation, describe a "
+        "figure or run that does not exist, or state a result more strongly than the "
+        "measurement",
+    ),
+}
+
+TAILOR = """
+Tailor for this project (Orchestrator, with the user — edit this file, keep the rules):
+- narrow *Owns* to the exact paths this project uses;
+- name the tools this role may run here, as the environment record lists them;
+- say when the role is opened: the phase, and the step of `.rh/CHECKLIST.md`;
+- leave project facts (models, commands, paths, budget) in `.rh/env.json` and
+  `PLAN.md`; this file is about how the role works, not what this project decided.
+"""
+
+
+def default_content(role: str) -> str:
+    """Starter content for a role file: role + boundary, generalized (no project facts)."""
+    role = (role or "").strip().lower()
+    if role == "orchestrator":
+        return ORCHESTRATOR_CONTENT + TAILOR
+    scope = ROLE_SCOPE.get(role)
+    if scope is None:
+        # a role the skill does not define yet: minimal but non-empty
+        return (
+            f"# {role.upper()} agent\n\n"
+            f"Role: <name the job and the phase it serves>\n"
+            f"Owns: <files this role may write>\n"
+            f"May: <actions allowed>\n"
+            f"May not: <actions refused>\n"
+            + ROLE_FOOTER.format(role=role)
+            + TAILOR
+        )
+    purpose, owns, may, may_not = scope
+    return (
+        f"# {role.upper()} agent\n\n"
+        f"Role: {purpose}\n"
+        f"Owns: {owns}\n"
+        f"May: {may}.\n"
+        f"May not: {may_not}.\n"
+        + ROLE_FOOTER.format(role=role)
+        + TAILOR
+    )
 
 
 def read_role(root: Path, role: str) -> str | None:
@@ -145,13 +219,26 @@ def list_roles(root: Path) -> list[str]:
     return sorted(names)
 
 
+# Marker of the pre-0.1.5 blank scaffold ("Role: <what this agent is for ...>").
+# A file still carrying it was never edited, so it is safe to replace with the
+# populated starter; a file the Orchestrator has edited is left alone.
+_STUB_MARK = "Role: <what this agent is for"
+
+
+def _is_old_stub(p: Path) -> bool:
+    try:
+        return _STUB_MARK in p.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def write_all(root: Path) -> list[Path]:
     d = agents_dir(root)
     d.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for role in STARTER_ROLES:
         p = role_file(root, role)
-        if not p.exists():
+        if not p.exists() or _is_old_stub(p):
             p.write_text(default_content(role), encoding="utf-8")
             written.append(p)
     return written
@@ -161,7 +248,7 @@ def write_one(root: Path, role: str) -> Path:
     d = agents_dir(root)
     d.mkdir(parents=True, exist_ok=True)
     p = role_file(root, role)
-    if not p.exists():
+    if not p.exists() or _is_old_stub(p):
         p.write_text(default_content(role), encoding="utf-8")
     return p
 

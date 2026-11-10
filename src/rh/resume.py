@@ -49,7 +49,7 @@ def choose_interactively(title: str, options: list[str], *, allow_none: bool = F
 def next_tasks(store: TaskStore) -> list[dict]:
     """working first, then idle, ordered by phase then id."""
     tasks = store.list()
-    prio = {"working": 0, "idle": 1, "complete": 2}
+    prio = {"working": 0, "idle": 1, "complete": 2, "cancelled": 3}
     return sorted(tasks, key=lambda t: (prio.get(t["state"], 3), t["phase"], t["id"]))[:5]
 
 

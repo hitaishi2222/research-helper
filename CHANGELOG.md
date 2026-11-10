@@ -4,10 +4,27 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
-## [0.1.5] — unreleased (open)
+## [0.1.6] — 2026-11-10
 
-Small fixes found while running the CLI against a real project. Add to this section
-until the user names a release.
+A fifth task state for plans that die, role files that arrive populated, and the
+PDF/arXiv tool named in the config. Plus fixes found by running the CLI against a
+real project.
+
+### Added
+
+- **`literature.library` — the PDF library / arXiv download tool**, asked by the
+  `rh init` wizard (papr / zot / lit / none, with `✓ on PATH` per option) and settable
+  as `rh env set literature.library=papr`. `papr` is a TUI that keeps a paper library,
+  fetches from arXiv (`papr download <arxiv-id>`) and writes the manuscript; the skill
+  now says how it fits (point its `download_path` at `papers/`, library entry ≠ citation,
+  its Typst project may be the writing surface but `MANUSCRIPT.md` stays the record).
+  Wizard answers outside `agents.*`/`project.*` used to be dropped on write — they are
+  applied now, which is what lets this key be asked at init.
+- **`cancelled` task state.** A later step can kill the plan, so a task can now be
+  dropped deliberately: `rh tasks set <id> cancelled` (also `--state cancelled` on
+  `rh add task`). It renders `⊘` and counts as *resolved* — the progress bars treat
+  it like complete — but the `complete` count never includes it, so the board still
+  says how much was actually delivered.
 
 ### Removed
 
@@ -21,6 +38,16 @@ until the user names a release.
 
 ### Fixed
 
+- **`rh init` wrote five blank role files.** `.rh/agents/` `literature`, `researcher`,
+  `reviewer`, `critique`, `writer` held `<what this agent is for — one sentence>`
+  fill-in blanks, so a fresh project had no role rules until someone typed them.
+  Every starter now carries its SKILL.md §5 row (owns / may / may not) plus the
+  session rules and the `{agent_file}` wiring note — deliberately generalized: the
+  job and its boundary, no project facts (paths, tools, phases, output names). A
+  `Tailor for this project` block in each file hands that narrowing to the
+  Orchestrator, who edits the file with the user. `rh agents --write` also
+  replaces a role file that still holds the old blank scaffold, and leaves an
+  edited one alone.
 - `rh plan import` with no `PLAN.md` said "PLAN.md and the board agree", which is
   wrong twice: nothing was compared and nothing was imported. It now says there is
   no plan yet and points at `rh info PLAN.md` for the shapes it understands.

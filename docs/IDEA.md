@@ -13,7 +13,7 @@ Checkout the ../research-helper/SKILL.md , We need to make this easier for AI's 
 - For tasks and status purpose take inspiration from `openspec` on github. But dont follow all their spec driven task manage create a lot of files - bloating the workspace and hard to comprehend whats happening.
 - `rh status` -> Should show with nice UI about the tasks running and upcomming states.
 - `rh tasks` -> Should show all the tasks and subtasks done.
-- `complete|working|idle` should be the different state of a tasks. state can be changeable though cli.
+- `complete|working|idle|cancelled` should be the different state of a tasks (`cancelled` = a later step killed the plan). state can be changeable though cli.
 - `rh workflow` should create a cli diagram where it can show the actual workflow like architecture. Check some of the cli tools that can make this possible using mermaid ex: `mmdr` or `beautiful-mermaid` check its installed or not. Its not mandatory for user to install this. If there are binaries for it use it otherwise just tell the user we might need these binaries with different options.
 - `rh workflow` should also represent in which stage we are currently in the project.
 

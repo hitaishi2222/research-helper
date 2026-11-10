@@ -185,7 +185,7 @@ def mermaid_for_tasks(tasks: list[dict], *, direction: str = "TD") -> str:
     """Mermaid DAG of the PROJECT's plan steps (Orchestrator/Researcher's PLAN.md).
 
     Nodes = board tasks, edges = depends_on. State classes: complete/working/
-    idle. Dependencies that are not on the board are skipped (noted in output
+    idle/cancelled. Dependencies that are not on the board are skipped (noted in output
     by the caller). The SKILL.md phase pipeline is constant — this is the
     per-project workflow.
     """
@@ -193,7 +193,12 @@ def mermaid_for_tasks(tasks: list[dict], *, direction: str = "TD") -> str:
     lines = [f"flowchart {direction}", "%%{init: {'theme': 'dark'}}%%" if False else ""]
     lines = [f"flowchart {direction}"]
     for t in tasks:
-        cls = {"complete": "done", "working": "working", "idle": "todo"}.get(t["state"], "todo")
+        cls = {
+            "complete": "done",
+            "working": "working",
+            "idle": "todo",
+            "cancelled": "dead",
+        }.get(t["state"], "todo")
         label = (t.get("title") or t["id"]).replace('"', "'").replace("\n", " ")
         extra = []
         if t.get("deliverable"):
@@ -210,6 +215,7 @@ def mermaid_for_tasks(tasks: list[dict], *, direction: str = "TD") -> str:
         "    classDef done fill:#14532d,stroke:#22c55e,color:#dcfce7;",
         "    classDef working fill:#1d4ed8,stroke:#93c5fd,color:#fff,stroke-width:3px;",
         "    classDef todo fill:#0b0f17,stroke:#374151,color:#6b7280;",
+        "    classDef dead fill:#0b0f17,stroke:#7f1d1d,color:#6b7280;",
     ]
     return "\n".join(lines) + "\n"
 
@@ -316,7 +322,8 @@ _EDGE_RE = re.compile(
 )
 _SUBGRAPH_RE = re.compile(r'^\s*subgraph\s+([\w-]+)\s*(?:\["?([^"\]]*)"?\])?')
 _GLYPH = {"done": "☑", "complete": "☑", "next": "▶", "working": "▶",
-          "gate": "◆", "cond": "◇", "todo": "○"}
+          "gate": "◆", "cond": "◇", "todo": "○", "dead": "⊘",
+          "cancelled": "⊘"}
 
 
 def _plain(label: str) -> str:

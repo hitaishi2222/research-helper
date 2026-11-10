@@ -63,9 +63,9 @@ config and no project data.
   papers/              downloaded PDFs, named <firstauthor><year>_<slug>.pdf
                        keep them: never delete or move a downloaded paper
   .rh/logs/            event logs (§7)
-  .rh/agents/<role>.md the role itself. `rh init` scaffolds the six starter roles; edit a role
-                       file with the user, and wire it into the CLI's system-prompt area in
-                       `agents.commands.<role>`.
+  .rh/agents/<role>.md the role itself. `rh init` writes the six starter roles, each carrying
+                       its §5 scope; narrow a role file with the user, and wire it into the
+                       CLI's system-prompt area in `agents.commands.<role>`.
   src/                 implementation
   results/             every produced number, table and figure, with the script that made it
 ```
@@ -140,6 +140,7 @@ is plain JSON.
   },
   "literature": {
     "ref_manager": "zot",  // user-named, e.g. zot | bibtex | none
+    "library": "papr",     // user-named PDF library / arXiv fetch tool, e.g. papr | zot | none
     "reading": "lit",      // user-named reader, e.g. lit | pdftotext | images
     "paywall": "ask_user", // ask_user | skip (skip = continue without that paper)
     "search": "crw"        // user-named search tool; any binary or service is valid
@@ -179,7 +180,7 @@ Every phase states its exit gate. Do not enter the next phase with a gate unmet.
 
 ### Phase 0, CONFIG: `.rh/env.json`, `.rh/agents/`, `.rh/CHECKLIST.md`
 
-`rh init` writes the workspace in one pass: the config, six role scaffolds and
+`rh init` writes the workspace in one pass: the config, six role files (each with its §5 scope) and
 `.rh/CHECKLIST.md`, your to-do list for the session (environment values still to ask about, launch
 commands to wire, role files to tailor, `.rh/workflow.mmd` after the plan). It walks a short
 questionnaire (name, agent count, backend, CLI, shell, split, start template) that shows the keys
@@ -245,6 +246,13 @@ manuscript or report, say so and this file may not exist.
 `GAPS.md` records implementation sourcing: repo or paper, licence, what we borrow, what the source
 lacks, who to credit, whether an upstream fix or PR is warranted. Anything suspicious you find in a
 source's code goes to the Orchestrator or Critique, not into the implementation.
+
+Downloading: `literature.library` is the tool that fetches and keeps PDFs. When it is `papr`
+(`papr download <arxiv-id>`, a TUI for the library, arXiv fetching and the manuscript), point its
+`download_path` at this project's `papers/` — or leave it in papr's own library and record the path in
+`.rh/ENVIRONMENT.md` — then read from there. Whatever the tool, `LITERATURE.md` stays the record of
+what we took: a PDF in a library is not a citation, and `papr`'s manuscript view is a workspace, not
+evidence. Never cite from a library entry you have not opened.
 
 Paywall: ask the user for the PDF by DOI. With a `ref_manager` it joins that collection, which then
 holds the authoritative copy and `papers/` keeps only unmanaged PDFs; without one it goes into
@@ -330,6 +338,10 @@ topics, equations and figures. If the layout is wrong, fix `OUTPUT_LAYOUT.md` fi
 Reviewer checks claim against evidence, number against table, and section against layout; Critique
 signs off. Missing evidence is a hard stop: delete the claim, never soften it.
 
+If the user writes in `papr` (`literature.library`), its Typst project can be the writing surface —
+the user names the file and `.rh/OUTPUT_LAYOUT.md` still drives the sections. `MANUSCRIPT.md` (or the
+named file) stays the record the Reviewer reads: a claim a tool renders is not a claim with evidence.
+
 Exit gate: every claim has an evidence line, no number disagrees with its source, and Critique has
 signed off.
 
@@ -377,7 +389,7 @@ hat's work would be reviewed by the same context that did the work, say so in `S
 must know the review was not independent.
 
 `rh` hardcodes no role information. A role is its file, `.rh/agents/<role>.md` (see `rh agents`),
-which carries the role's rules and scope. `rh init` scaffolds the starter roles; add a later one with
+which carries the role's rules and scope. `rh init` writes the starter roles, each with its §5 scope to narrow with the user; add a later one with
 `rh agents <role> --write`, edit it with the user's approval, and record its launch command as
 `agents.commands.<role>` in `.rh/env.json`. `rh spawn <role>` then runs exactly that command and
 puts the role file in its `{agent_file}` slot. For a plain shell rather than an agent, use

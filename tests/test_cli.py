@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from rh import checklist, cli, config, paths, spawn, tasks, workflow
+from rh import agents, checklist, cli, config, paths, spawn, tasks, workflow
 
 
 def run(argv):
@@ -63,6 +63,37 @@ def test_agents_skills_key(tmp_path, capsys):
     assert data["agents"]["skills"] == ["research-helper", "crw"]
 
 
+def test_role_files_are_populated_not_blank(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    capsys.readouterr()
+    for role in agents.STARTER_ROLES:
+        text = agents.read_role(tmp_path, role)
+        assert text and "Role: " in text, role
+        # no fill-in blanks survive into the generated starter
+        assert "<what this agent" not in text, role
+        assert "<artifacts and directories" not in text, role
+        assert "agents.commands.%s" % role in text, role
+        # generalized starter: no project facts baked in, tailoring is the Orchestrator's
+        assert "Tailor for this project" in text, role
+        for fact in ("papers/", "results/", "src/", "MANUSCRIPT.md", "phase 3"):
+            assert fact not in text, (role, fact)
+
+
+def test_init_refreshes_only_untouched_stub_roles(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    capsys.readouterr()
+    # a pre-0.1.5 blank stub is replaced; an edited file is left alone
+    stub = tmp_path / ".rh" / "agents" / "writer.md"
+    stub.write_text("# WRITER agent\n\nRole: <what this agent is for — one sentence>\n")
+    edited = tmp_path / ".rh" / "agents" / "reviewer.md"
+    edited.write_text("# REVIEWER agent\n\nRole: our own reviewer rules.\n")
+    agents.write_all(tmp_path)
+    assert "<what this agent" not in stub.read_text()
+    assert edited.read_text() == "# REVIEWER agent\n\nRole: our own reviewer rules.\n"
+
+
 def test_add_task_and_list(tmp_path, capsys):
     root = str(tmp_path)
     run(["--root", root, "init"])
@@ -74,6 +105,24 @@ def test_add_task_and_list(tmp_path, capsys):
     data = payload(capsys.readouterr().out, "{")
     assert data["tasks"][0]["id"] == "S01"
     assert data["tasks"][0]["subtasks"][0]["state"] == "working"
+
+
+def test_cancelled_is_a_state_that_resolves_progress(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    for tid in ("S01", "S02"):
+        run(["--root", root, "add", "task", "step", "--id", tid])
+    capsys.readouterr()
+    assert run(["--root", root, "tasks", "set", "S01", "complete"]) == 0
+    assert run(["--root", root, "tasks", "set", "S02", "cancelled"]) == 0
+    capsys.readouterr()
+    assert run(["--root", root, "tasks", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    # cancelled is not idle waste: it counts as resolved, never as complete
+    assert data["summary"]["cancelled"] == 1
+    assert data["summary"]["idle"] == 0
+    assert data["summary"]["complete"] == 1
+    assert data["summary"]["pct"] == 100
 
 
 def test_papers_stay_at_root(tmp_path):
@@ -311,7 +360,7 @@ def test_agents_write_list_and_spawn_uses_role_file(tmp_path, capsys):
     data = payload(capsys.readouterr().out, "{")
     assert "Role file (.rh/agents/<role>.md)" in data["prompt"]
     assert "Owns:" in data["prompt"] and "# RESEARCHER agent" in data["prompt"]
-    assert "agents.commands.<role>" in data["prompt"]
+    assert "agents.commands.researcher" in data["prompt"]
 
 
 def test_checklist_reports_live_items(tmp_path, capsys):
@@ -719,7 +768,7 @@ def test_init_creates_role_files_and_orchestrator_checklist(tmp_path, capsys):
 
 def test_init_applies_the_chosen_harness_template(tmp_path, capsys, monkeypatch):
     """The harness answer from the questionnaire fills the launch commands."""
-    answers = iter(["", "", "", "", "", "", "pi"])  # ..., harness = pi
+    answers = iter(["", "", "", "", "", "", "pi", ""])  # ..., harness = pi
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda *a: next(answers))
     root = str(tmp_path)
@@ -793,15 +842,30 @@ def test_init_questionnaire_renders_shortcuts_and_q_finishes(tmp_path, capsys, m
     assert run(["--root", root, "init"]) == 0
     out = capsys.readouterr().out
     assert "keys" in out and "tab" in out and "ctrl-c" in out
-    assert "1/7" in out
+    assert "1/8" in out
     env = config.load_env(tmp_path)
     assert env["project"]["name"] == "demo"
     assert env["agents"]["count"] == 1  # never asked: q stopped the cycle
 
 
+def test_init_questionnaire_offers_papr_library(tmp_path, capsys, monkeypatch):
+    """The PDF/arXiv question exists and its answer lands in literature.library."""
+    answers = iter(["", "", "", "", "", "", "", "papr"])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a: next(answers))
+    root = str(tmp_path)
+    capsys.readouterr()
+    assert run(["--root", root, "init"]) == 0
+    out = capsys.readouterr().out
+    assert "papr" in out and "arXiv" in out
+    assert config.load_env(tmp_path)["literature"]["library"] == "papr"
+    assert run(["--root", root, "env", "show", "--json"]) == 0
+    assert payload(capsys.readouterr().out, "{")["literature"]["library"] == "papr"
+
+
 def test_init_questionnaire_other_accepts_a_custom_binary(tmp_path, capsys, monkeypatch):
     """Choosing `other` opens a free-text prompt for a binary that is not detected."""
-    answers = iter(["", "", "", "other", "mycli", "", "", ""])
+    answers = iter(["", "", "", "other", "mycli", "", "", "", ""])
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda *a: next(answers))
     root = str(tmp_path)

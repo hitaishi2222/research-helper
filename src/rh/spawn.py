@@ -505,7 +505,7 @@ def exec_argv(root: Path, argv: list[str]) -> tuple[bool, str]:
 def role_tasks(store: TaskStore, role: str, limit: int = 8) -> list[dict]:
     """Board tasks owned by `role` (the Orchestrator sees the whole next-up list)."""
     tasks = store.list()
-    prio = {"working": 0, "idle": 1, "complete": 2}
+    prio = {"working": 0, "idle": 1, "complete": 2, "cancelled": 3}
     owned = [t for t in tasks if str(t.get("owner") or "").lower() == role]
     if not owned and role == "orchestrator":
         owned = tasks

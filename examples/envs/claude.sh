@@ -11,5 +11,5 @@ rh env set \
   agents.split=vertical \
   "agents.commands.orchestrator=claude --model {model} --append-system-prompt-file {agent_file} --prompt-file {prompt_file}" \
   "agents.commands.default=claude --model {model} --append-system-prompt-file {agent_file} --prompt-file {prompt_file}" \
-  'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
 rh doctor

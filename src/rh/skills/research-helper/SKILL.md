@@ -37,10 +37,17 @@ Nothing here is advice. If a rule cannot be followed, stop and ask.
     `$HOME`, a parent directory, or a neighbouring project.
 13. **Close what you opened.** When a spawned agent finishes, close its pane, window or tab and
     record the close in `STATUS.md`. Agents left running spend the user's credits.
-14. **One agent means fresh eyes come from a new session.** With `agents.count = 1` nothing
-    independent reviews the work. After a gate-heavy step (plan approved, implementation done,
-    critique answered), tell the user to continue in a new session and hand over `STATUS.md` and
-    `PLAN.md` instead of stretching this transcript.
+14. **One agent means fresh eyes come from a new session, and a handoff is written for it.**
+    With `agents.count = 1` nothing independent reviews the work. After a gate-heavy step (plan
+    approved, implementation done, critique answered), tell the user to continue in a new session.
+    Before you stop, write `.rh/HANDOFF.md` yourself: what the next session must do first and what
+    to watch out for. It is empty at `rh init`, `rh resume` reads it only when it has content, and
+    you clear it with `rh handoff --clear` once absorbed. Never generate it from `STATUS.md` or
+    `PLAN.md`; those are state, the handoff is the next move.
+15. **Names are project-scoped.** Two projects run at the same time, so every pane, window or
+    workspace is named `rh-<project>-<role>` (e.g. `rh-optics-researcher`), never `rh-<role>`.
+    Address an agent by that name; it is also the name in its own prompt. If two panes of one
+    role run at once, add a suffix and record it in `STATUS.md`.
 
 ## 1. Where things live
 
@@ -52,9 +59,10 @@ config and no project data.
   .rh/env.json         the config (§2), written by `rh env set`      Orchestrator   phase 0
   .rh/ENVIRONMENT.md   tools and versions the user named             Orchestrator   phase 2
   .rh/CHECKLIST.md     generated to-do list: setup, gates, rules     Orchestrator   phase 0+
-  PROBLEM.md           goal, scope, success criteria, falsifier      Orchestrator   phase 1
+  PROBLEM.md           purpose, goal, scope, success criteria, falsifier  Orchestrator  phase 1
   PLAN.md              approved step list                            Planners or user  phase 4
   STATUS.md            state, roster, blockers, open questions       Orchestrator   phase 5+
+  .rh/HANDOFF.md       what the next session must do first           Orchestrator   session end
   LITERATURE.md        what we took from each paper, with citations   Literature    phase 3
   OUTPUT_LAYOUT.md     output skeleton plus the patterns comparable
                        papers follow (sections, equations, figures)   Literature    phase 3+
@@ -83,9 +91,10 @@ Before writing any artifact, run `rh info <FILE.md>`. It prints the purpose, own
 sections, template and the rules that apply, so no agent has to guess.
 
 The `rh` CLI (§10) keeps its machine state under `.rh/`: `env.json`, `ENVIRONMENT.md`,
-`CHECKLIST.md`, `tasks.json`, `agents/`, `logs/`, `notes/`, `workflow.mmd`. The artifacts above
-remain the truth. `.rh/` is derived display state, with two exceptions: `rh env set` writes
-`env.json`, and `rh` never deletes a downloaded paper.
+`CHECKLIST.md`, `tasks.json`, `agents/`, `logs/`, `notes/`, `workflow.mmd`, `HANDOFF.md`. The
+artifacts above remain the truth. `.rh/` is derived display state, with three exceptions: `rh env
+set` writes `env.json`, the Orchestrator writes `HANDOFF.md`, and `rh` never deletes a downloaded
+paper.
 
 ## 2. `.rh/env.json`, the config
 
@@ -113,7 +122,7 @@ is plain JSON.
     "commands": {
       // How an agent CLI is STARTED. Ask for it; never invent it. rh substitutes the
       // placeholders {model} {thinking} {skills} {prompt} {prompt_file} {agent_file}
-      // {root} {name} {role}.
+      // {root} {name} {project} {role}.
       // {agent_file} is .rh/agents/<role>.md: put it in the harness's system-prompt
       // APPEND flag (pi: --append-system-prompt {agent_file}; claude:
       // --append-system-prompt-file {agent_file}; others: their equivalent). Never a
@@ -128,9 +137,10 @@ is plain JSON.
       "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --append-system-prompt {agent_file} {prompt}",
       "default": ""         // used by any role without its own command
     },
-    "spawn": "tmux new-window -n rh-{agent} -c {root} {command}",  // how `rh spawn` opens
+    "spawn": "tmux new-window -n rh-{project}-{agent} -c {root} {command}",  // how `rh spawn` opens
                        // an agent; {command} is the launch command, shell-quoted. Empty =
-                       // start detached and log to .rh/logs/.
+                       // start detached and log to .rh/logs/. `{project}` is the project-name
+                       // slug: name every pane `rh-<project>-<role>` so two projects never clash.
     "shell": "fish",       // shell for `rh spawn terminal`; blank = $SHELL, else sh. Ask, never probe.
     "split": "vertical",   // pane layout for `rh spawn`: vertical | horizontal | window. Ask, never assume.
     "planners": {
@@ -180,13 +190,14 @@ Every phase states its exit gate. Do not enter the next phase with a gate unmet.
 
 ### Phase 0, CONFIG: `.rh/env.json`, `.rh/agents/`, `.rh/CHECKLIST.md`
 
-`rh init` writes the workspace in one pass: the config, six role files (each with its §5 scope) and
+`rh init` writes the workspace in one pass: the config, six role files (each with its §5 scope),
 `.rh/CHECKLIST.md`, your to-do list for the session (environment values still to ask about, launch
-commands to wire, role files to tailor, `.rh/workflow.mmd` after the plan). It walks a short
-questionnaire (name, agent count, backend, CLI, shell, split, start template) that shows the keys
-once, then offers the installed options. It does not ask which skills to load; that is your call
-with `rh env set agents.skills=...`. Enter keeps a configured value, Tab submits and moves on, `s`
-really skips (a skipped question is yours to ask later), `q` finishes with the answers so far.
+commands to wire, role files to tailor, `.rh/workflow.mmd` after the plan), and an empty
+`.rh/HANDOFF.md`. It walks a short questionnaire (name, agent count, backend, CLI, shell, split,
+start template) that shows the keys once, then offers the installed options. It does not ask which
+skills to load; that is your call with `rh env set agents.skills=...`. Enter keeps a configured
+value, Tab submits and moves on, `s` really skips (a skipped question is yours to ask later), `q`
+finishes with the answers so far.
 
 It never overwrites without archiving first: `--force` archives a copy, `--clean` archives the whole
 `.rh/` (event logs, notes) before recreating it, `--dry-run` writes nothing.
@@ -198,12 +209,17 @@ Exit gate: the file parses, the user confirmed it, and it sits in `.rh/` of the 
 
 ### Phase 1, INTAKE: `PROBLEM.md`
 
-Ask, do not assume: the research question in one sentence, why it matters, what counts as success,
-what would falsify the result, constraints (time, hardware, data licence), and what is explicitly
-out of scope.
+Start with the purpose: why this work, now. Ask what the output is for — reproducing a reference,
+checking a dataset, a Q1 journal submission, a reproduction or benchmark, answering a reviewer, an
+internal decision. The purpose decides how much evidence is enough and what "done" means, so it
+comes before the research question and is recorded in `PROBLEM.md` first.
 
-Exit gate: `PROBLEM.md` has all six sections, and the user either read it back in their own words
-or approved it.
+Then ask, do not assume: the research question in one sentence, why it matters, what counts as
+success, what would falsify the result, constraints (time, hardware, data licence), and what is
+explicitly out of scope.
+
+Exit gate: `PROBLEM.md` has all seven sections, purpose first, and the user either read it back in
+their own words or approved it.
 
 ### Phase 2, ENVIRONMENT: the environment record
 
@@ -348,11 +364,13 @@ signed off.
 ### Phase 9, CLOSE
 
 Finalize `STATUS.md` (all steps checked, tests green, gate closed), write one log with lessons and
-dead ends, list what is reusable next time, and state what was left undone. Ask whether to push
-(`project.git`); never push unasked.
+dead ends, list what is reusable next time, and state what was left undone. Write `.rh/HANDOFF.md`
+for the next session (what to do first, what to watch out for) and leave it non-empty; an empty
+handoff says the work is finished. Ask whether to push (`project.git`); never push unasked.
 
-Exit gate: `STATUS.md` shows every step checked and the suite green, the close log exists, and the
-push question is answered.
+Exit gate: `STATUS.md` shows every step checked and the suite green, the close log exists, the
+handoff is written (or deliberately empty because nothing follows), and the push question is
+answered.
 
 ## 4. Replanning
 
@@ -408,6 +426,25 @@ the user if anything differs from `.rh/env.json`. Confirm the close the same way
 your own work, not the resume command's. The `rh` repo's `examples/` holds starter scripts and
 per-role prompt templates with `{{PLACEHOLDER}}`s.
 
+### Spawning an agent, step by step
+
+1. Verify the root and `.rh/env.json` (rule 12). Print the path.
+2. Pick the role whose scope owns the work. If `.rh/agents/<role>.md` or
+   `agents.commands.<role>` is missing, create/ask for it first — never spawn an undefined role.
+3. Preview: `rh spawn <role> "<instructions>" --dry-run`. It must show `mode: pane`, the model and
+   skills from `.rh/env.json`, and a name of the form `rh-<project>-<role>`.
+4. Open it: `rh spawn <role> "<instructions>"`. The prompt carries the role file, the session facts
+   (model, skills, current phase, board tasks) and its backend name.
+5. Talk to it **by that name**, not by "the researcher". Use the backend skill from
+   `agents.backend` (`tmux`: `tmux send-keys -t rh-<project>-<role> '…' Enter`; herdr and tuios have
+   their own send/read commands). Two projects never share a name, so `rh-optics-researcher` and
+   `rh-audio-researcher` can run side by side.
+6. Record the spawn (role, model, name) in `STATUS.md`, and when the job is done close the pane and
+   record the close (rule 13) — an agent left running spends the user's credits.
+
+With `agents.count = 1` there is nothing to spawn: do the hat yourself and hand the user to a fresh
+session at the gates (rule 14).
+
 ## 6. Ask-before list
 
 No approval needed: reading, searching, writing the skill's own artifacts, running tests,
@@ -457,11 +494,23 @@ valid:
 ```
 # Status, <project name>
 phase: 6 IMPLEMENT | step: S07 | updated: <ISO timestamp>
-agents: orchestrator=<model>  researcher=<model>  (backend: tmux window 2)
+agents: orchestrator=<model>  researcher=<model>  (backend: tmux window rh-<project>-researcher)
 blockers: none
 open questions for user: (numbered, each answerable in one line)
 history:
 - <ISO> S06 done, tests green (24 passed), results/S06.csv
+```
+
+`.rh/HANDOFF.md` (written when the session ends; empty means nothing follows)
+
+```
+# Handoff, <ISO timestamp>
+
+## Next session
+- <first action, and why it is first>
+
+## Watch out
+- <blocker, open question, or trap the last session hit>
 ```
 
 `OUTPUT_LAYOUT.md`
@@ -518,6 +567,7 @@ names its verification and that someone creates the matching task with `rh add t
 - Planning before reading the literature, then rewriting `PLAN.md` to fit what got built.
 - A plan approved by the Orchestrator alone, or by nobody.
 - A rule counted as met because an agent said so, rather than because a command or a file shows it.
+- A handoff that is a dump of `STATUS.md`/`PLAN.md` instead of the next session's first move.
 
 ## 10. The `rh` CLI, the machine layer
 
@@ -551,7 +601,8 @@ Commands, by phase:
 | `rh spawn terminal <cmd>` | any | opens a plain shell, not an agent |
 | `rh agents [ROLE] [--write]` | any | list or show the role files |
 | `rh doctor` | any | verify what the config names |
-| `rh agent status`, `rh gate check`, `rh log tail`, `rh handoff` | any | running agents, gate report, logs, fresh-session pack (rule 14) |
+| `rh agent status`, `rh gate check`, `rh log tail` | any | running agents, gate report, logs |
+| `rh handoff` / `rh handoff --clear` | any | show the next-session handoff the Orchestrator wrote, or empty it after reading (rule 14) |
 | `rh info [FILE.md]` | any | what an artifact is for: owner, phase, sections, template, rules |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd`; `--tools`, `--example` |
 
@@ -574,6 +625,8 @@ Contracts that keep the two layers consistent:
 4. **Same-terminal resume, explicit spawning.** Only the Orchestrator follows `rh resume`, and it
    never opens a pane: it execs the agent where the user typed the command. `rh spawn` opens one
    role agent through `agents.spawn`, else detached with a log in `.rh/logs/`, under rules 12 and 13.
+   The pane name is `rh-<project>-<role>` (`{project}` + `{agent}` in `agents.spawn`), so parallel
+   projects never collide.
 5. **`rh workflow` prefers an installed renderer.** `bm` (beautiful-mermaid CLI) first, then
    `mermaid-ascii`, `mermansi`, `mermaid2term`, `merx`, `ma`, and a compact text view when none fits.
 6. **`--json` works on every command** for agent reads. Never parse the pretty output.

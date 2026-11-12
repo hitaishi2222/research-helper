@@ -36,6 +36,7 @@ RULE_REFS = {
     "verify_path": "§0.12",
     "close_agents": "§0.13",
     "fresh_session": "§0.14",
+    "pane_names": "§0.15",
     "plan_approval": "§3 phase 4",
     "critique_veto": "§3 phase 7",
 }
@@ -164,7 +165,7 @@ def _setup_items(root: Path, env: dict, current: int) -> list[dict]:
         "label": "Set `agents.spawn` when agents.open in panes (blank backend = detached process)",
         "status": "pending" if needs_spawn else "ok",
         "ref": "§2",
-        "detail": (f"agents.backend={backend} but agents.spawn is blank — ask the user for the pane command (e.g. tmux new-window -n rh-{{agent}} -c {{root}} {{command}})")
+        "detail": (f"agents.backend={backend} but agents.spawn is blank — ask the user for the pane command (e.g. tmux new-window -n rh-{{project}}-{{agent}} -c {{root}} {{command}})")
         if needs_spawn else f"backend={backend}",
     })
 
@@ -272,13 +273,22 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         "detail": "open panes/windows are visible to the user; check STATUS.md roster before assuming zero running agents",
     })
 
-    # Rule 14 — fresh session after gate-heavy steps.
+    # Rule 14 — fresh session after gate-heavy steps, with an authored handoff.
     items.append({
         "id": "rule-14",
-        "label": "After a gate-heavy step, tell the user to continue in a fresh session and hand over STATUS.md + PLAN.md",
+        "label": "After a gate-heavy step, tell the user to continue in a fresh session; write `.rh/HANDOFF.md` first and clear it after reading",
         "status": "current",
         "ref": RULE_REFS["fresh_session"],
-        "detail": "plan approved / implementation done / critique answered → fresh session",
+        "detail": "plan approved / implementation done / critique answered → write the handoff (what to do next, not a STATUS copy), then a fresh session; `rh handoff` shows it, `rh handoff --clear` empties it",
+    })
+
+    # Rule 15 — project-scoped pane names.
+    items.append({
+        "id": "rule-15",
+        "label": "Every pane/window named `rh-<project>-<role>` and addressed by that name",
+        "status": "current",
+        "ref": RULE_REFS["pane_names"],
+        "detail": "agents.spawn uses `-n rh-{project}-{agent}`; two projects never share a name — check STATUS.md for the roster",
     })
 
     # Plan approval — gates.user_approves_plan
@@ -312,6 +322,15 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         return ""
 
     status_text = _read("STATUS.md")
+    problem_text = _read("PROBLEM.md")
+    purpose_ok = bool(_re.search(r"(?mi)^##\s+Purpose\b", problem_text))
+    items.append({
+        "id": "content-problem-purpose",
+        "label": "PROBLEM.md starts with `## Purpose` (why this work: reference, data check, Q1, reproduction …)",
+        "status": _due(purpose_ok, 1, current),
+        "ref": "§3 phase 1",
+        "detail": "" if purpose_ok else "ask the user why this work now, then record it under `## Purpose` before the question",
+    })
     plan_text = _read("PLAN.md")
     lit_text = _read("LITERATURE.md")
     layout_text = _read("OUTPUT_LAYOUT.md")

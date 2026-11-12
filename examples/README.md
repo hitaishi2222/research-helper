@@ -58,7 +58,7 @@ closing the pane stay with the Orchestrator — that is rule 9 and rule 13.
 rh env set \
   'agents.commands.researcher=<your binary> --model {model} --thinking {thinking} {prompt}' \
   'agents.roles.researcher={"provider":"<vendor>","model":"<model>","thinking":"medium"}' \
-  'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
 rh spawn researcher "read S07 of PLAN.md and implement it"
 ```
 

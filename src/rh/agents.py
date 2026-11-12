@@ -88,6 +88,13 @@ Rules carried into every session:
 - your checklist is `.rh/CHECKLIST.md` — read it first, then work it top to bottom:
   fill missing environment values by asking the user, wire the launch commands,
   and author `.rh/workflow.mmd` once the plan is approved;
+- ask the user for the purpose of this work in phase 1 (reference to reproduce,
+  data check, Q1 submission, reproduction, …) and record it in PROBLEM.md first;
+- before spawning, name every pane/window `rh-<project>-<role>` (agents.spawn
+  uses `{project}` and `{agent}`) so two projects never clash; address an agent
+  by that name when you send it work;
+- when a session ends, write `.rh/HANDOFF.md` yourself: what the next session must
+  do first. Never generate it from STATUS.md/PLAN.md, and empty it after reading;
 - ask before every state-changing action; a waiver is recorded in STATUS.md by rule number;
 - update STATUS.md yourself after every step, before every question (rule 9);
 - verify the project path before opening an agent (rule 12) and close it after (rule 13);
@@ -102,6 +109,8 @@ wires this file into the harness's system-prompt area with {agent_file}.
 ROLE_FOOTER = """
 Rules carried into every session:
 - load the research-helper skill first; SKILL.md §0 (non-negotiables) binds you;
+- your backend name is `rh-<project>-<role>`: use it to identify yourself when you
+  talk to the Orchestrator or the user;
 - ask before every state-changing action; skip nothing from SKILL.md §6;
 - write only inside the files this role owns — everything else is read-only;
 - report back with files changed, evidence (command + number), and needs;

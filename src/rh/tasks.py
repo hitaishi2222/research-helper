@@ -186,7 +186,7 @@ class TaskStore:
 # Exit gate text per phase (SKILL.md §3) — shown by `rh phase`, never enforced alone.
 PHASE_EXIT = {
     0: ".rh/env.json parses and the user confirmed it",
-    1: "PROBLEM.md has all six sections, user approved",
+    1: "PROBLEM.md has all seven sections (purpose first), user approved",
     2: ".rh/ENVIRONMENT.md notes the tools/versions the user named",
     3: "LITERATURE.md (+ OUTPUT_LAYOUT.md when the output is a paper/report), or a user-agreed skip",
     4: "PLAN.md: both planners agreed + the user approved it",
@@ -194,7 +194,7 @@ PHASE_EXIT = {
     6: "plan steps checked, tests green, results/ reproduces from a clean run",
     7: "zero open blocking questions from Critique",
     8: "every claim has an evidence line, Critique signed off",
-    9: "all steps checked, close log written, push question answered",
+    9: "all steps checked, close log written, handoff written, push question answered",
 }
 
 

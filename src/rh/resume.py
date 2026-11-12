@@ -14,7 +14,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import ui
+from . import paths, ui
 from .tasks import TaskStore
 
 AGENT_CLIS = ("pi", "opencode", "claude", "codex", "gemini", "aider", "goose")
@@ -83,6 +83,18 @@ def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str
         "Then `rh phase` and `.rh/STATUS.md`. Ask the user before every state-changing",
         "action (SKILL.md §0.3).",
     ]
+    handoff = paths.rh_dir(root) / "HANDOFF.md"
+    try:
+        pending = handoff.read_text(encoding="utf-8").strip()
+    except OSError:
+        pending = ""
+    if pending:
+        lines += [
+            "",
+            "`.rh/HANDOFF.md` has instructions the last session left for this one. Read it",
+            "first and act on it, then empty it (`rh handoff --clear`): it is a handoff,",
+            "not state — STATUS.md and the artifacts stay the truth.",
+        ]
     if extra:
         lines += ["", "User instructions for this session:", extra.strip()]
     return "\n".join(lines)

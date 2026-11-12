@@ -33,13 +33,15 @@ ARTIFACTS: dict[str, dict] = {
         "consumers": "MANUSCRIPT.md methods copy the versions verbatim",
     },
     "PROBLEM.md": {
-        "purpose": "The research question and its boundaries: why it matters, what would "
-                   "count as success, and what would falsify the result. Everything later "
+        "purpose": "Why this work now and what it must answer: the purpose (a reference to "
+                   "reproduce, a data check, a Q1 submission, a reproduction…), the research "
+                   "question, its boundaries, success criteria and falsifier. Everything later "
                    "must answer this file.",
         "location": "PROBLEM.md",
         "owner": "Orchestrator (interview with the user)",
         "phase": "1 INTAKE",
         "sections": [
+            "## Purpose — why this work now: reproduce a reference, check data, publish in a Q1 journal, reproduce a result, answer a reviewer, … (one or two lines)",
             "## Question — one sentence, falsifiable",
             "## Why it matters",
             "## Success criteria — measurable",
@@ -47,11 +49,12 @@ ARTIFACTS: dict[str, dict] = {
             "## Constraints — time, hardware, data licence",
             "## Out of scope — explicit exclusions",
         ],
-        "template": "# Problem — <project name>\n\n## Question\n<one sentence>\n\n## Why it matters\n...\n\n"
+        "template": "# Problem — <project name>\n\n## Purpose\n<why now: reproduce / verify / publish / …>\n\n## Question\n<one sentence>\n\n## Why it matters\n...\n\n"
                     "## Success criteria\n- <measurable>\n\n## Falsifier\n<what would refute it>\n\n"
                     "## Constraints\n- <time/hardware/licence>\n\n## Out of scope\n- <excluded>",
         "rules": [
-            "Six sections, all non-empty; the user approves it before phase 1 exits.",
+            "Seven sections, all non-empty; the user approves it before phase 1 exits.",
+            "Ask the purpose; never infer it from the topic (SKILL.md §3 phase 1).",
             "Scope changes go back here first — never silently in PLAN.md.",
         ],
         "consumers": "PLAN.md, OUTPUT_LAYOUT.md, MANUSCRIPT.md",
@@ -193,6 +196,27 @@ ARTIFACTS: dict[str, dict] = {
         ],
         "consumers": "the resume handoff, the phase gate (`rh status`), the user",
     },
+    "HANDOFF.md": {
+        "purpose": "What the next session must do first. Written by the Orchestrator at the "
+                   "end of a session, never generated from STATUS/PLAN: it is a decision about "
+                   "the next move, not a status dump.",
+        "location": ".rh/HANDOFF.md (always under .rh/)",
+        "owner": "Orchestrator only",
+        "phase": "any — written when a session ends (rule 14)",
+        "sections": [
+            "## Next session — the first thing to do, and why",
+            "## Watch out — blockers, open questions, a trap the last session hit",
+        ],
+        "template": "# Handoff — <date>\n\n## Next session\n- <first action>\n\n## Watch out\n- <blocker / open question>\n",
+        "rules": [
+            "Empty at `rh init`; an empty file means nothing was handed over.",
+            "`rh resume` reads it only when it has content, then the Orchestrator clears it "
+            "with `rh handoff --clear` (rule 14).",
+            "Never list what STATUS.md already says; the handoff is what to do next, not where we are.",
+            "Never generate it automatically from other artifacts — a handoff is authored.",
+        ],
+        "consumers": "`rh resume` (first session prompt), the next Orchestrator",
+    },
     "MANUSCRIPT.md": {
         "purpose": "The write-up: drafted from artifacts only, following the single layout in "
                    "OUTPUT_LAYOUT.md, with an evidence line for every claim.",
@@ -234,7 +258,7 @@ def resolve(name: str) -> str | None:
 def names() -> list[str]:
     """Artifact names in pipeline order: ENVIRONMENT.md first, then one per phase."""
     order = ["ENVIRONMENT.md", "PROBLEM.md", "LITERATURE.md", "OUTPUT_LAYOUT.md", "GAPS.md",
-             "PLAN.md", "STATUS.md", "MANUSCRIPT.md"]
+             "PLAN.md", "STATUS.md", "HANDOFF.md", "MANUSCRIPT.md"]
     return [n for n in order if n in ARTIFACTS]
 
 

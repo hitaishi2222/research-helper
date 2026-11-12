@@ -83,7 +83,7 @@ A tool on `PATH` does not mean this project should use it.
 
 | Command | What it does |
 |---|---|
-| `rh init [--force] [--clean] [--dry-run]` | create the `.rh/` workspace **here** — `env.json`, `.rh/agents/*.md`, `.rh/CHECKLIST.md` — non-destructively (archives before writing or removing); the project name is the directory, changeable with `rh env set project.name=` |
+| `rh init [--force] [--clean] [--dry-run]` | create the `.rh/` workspace **here** — `env.json`, `.rh/agents/*.md`, `.rh/CHECKLIST.md`, an empty `.rh/HANDOFF.md` — non-destructively (archives before writing or removing); the project name is the directory, changeable with `rh env set project.name=` |
 | `rh env show` | print config as a table + `.rh/ENVIRONMENT.md` notes, validate |
 | `rh env set KEY=VALUE ...` | set any key from the §2 schema (`rh env list`) |
 | `rh env list` | every settable key, type, choices, help |
@@ -103,6 +103,7 @@ A tool on `PATH` does not mean this project should use it.
 | `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |
 | `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` creates a missing one (starters ship populated) |
+| `rh handoff` / `rh handoff --clear` | show the handoff the Orchestrator wrote for the next session (`.rh/HANDOFF.md`), or empty it after reading; empty at `rh init`, never generated from `STATUS.md`/`PLAN.md` |
 | `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
 | `rh describe [--json]` | the AI map: layout, phases, env keys, artifacts, spawn, budget |
@@ -122,16 +123,18 @@ Every command supports `--json` for agent reads — never parse the pretty UI.
 rh env set \
   'agents.roles.orchestrator={"provider":"pi","model":"glm-5","thinking":"high"}' \
   'agents.commands.orchestrator=pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}' \
-  'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
 rh resume            # → pi --model glm-5 --thinking high --append-system-prompt .rh/agents/orchestrator.md "Load the `research-helper` skill now…"
 rh spawn researcher "read S07 and implement it"
 ```
 
-Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {name} {provider}
+Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {name} {project} {provider}
 {model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template that
 omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your env.json
 is not being honoured instead of guessing a flag. With no `agents.spawn` the agent
 is started as a detached process and its output goes to `.rh/logs/`.
+`{project}` is the project-name slug: name every pane `rh-<project>-<role>`, so two
+projects running at the same time never collide.
 Ready-made scripts and per-role prompt templates live in [`examples/`](examples/README.md).
 
 
@@ -151,11 +154,11 @@ State lives in plain files, not a database:
 
 ```
 <project>/
-  .rh/                env.json, ENVIRONMENT.md, CHECKLIST.md, agents/, logs, tasks
+  .rh/                env.json, ENVIRONMENT.md, CHECKLIST.md, HANDOFF.md, agents/, logs, tasks
   src/                implementation
   results/            every number + the script that produced it
   papers/             downloaded PDFs (papr/Zotero or by hand; kept, never deleted by rh)
-  PROBLEM.md          goal, scope, success criteria, falsifier
+  PROBLEM.md          purpose, goal, scope, success criteria, falsifier
   OUTPUT_LAYOUT.md    output skeleton + patterns from comparable papers
   PLAN.md             approved steps
   STATUS.md           truth

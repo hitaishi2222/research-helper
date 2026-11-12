@@ -17,6 +17,7 @@ RH_ARTIFACTS = {
     "PROBLEM.md": "problem_md",
     "PLAN.md": "plan_md",
     "STATUS.md": "status_md",
+    "HANDOFF.md": "handoff_md",
     "LITERATURE.md": "literature_md",
     "OUTPUT_LAYOUT.md": "output_layout_md",
     "GAPS.md": "gaps_md",
@@ -164,6 +165,8 @@ def artifact_path(root: Path, name: str) -> Path:
     """
     if name == "ENVIRONMENT.md":
         return environment_md(root)
+    if name == "HANDOFF.md":
+        return rh_dir(root) / name  # authored handoff, never mirrored at the root
 
     in_rh = rh_dir(root) / name
     legacy = root / name

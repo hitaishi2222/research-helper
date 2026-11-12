@@ -103,7 +103,7 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
         "agents.spawn",
         "str",
         (),
-        "how `rh spawn` opens a parallel agent (blank = detached process + .rh/logs/ log), e.g. tmux new-window -n rh-{agent} -c {root} {command}",
+        "how `rh spawn` opens a parallel agent (blank = detached process + .rh/logs/ log), e.g. tmux new-window -n rh-{project}-{agent} -c {root} {command}",
     ),
     (
         "agents.shell",

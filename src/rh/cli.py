@@ -74,6 +74,7 @@ def cmd_init(args, root: Path):
         f"create {d}/ (folders: logs/ notes/ tasks/ tmp/)",
         "create src/ results/ papers/ at root",
         "create .rh/env.json (config), .rh/agents/*.md (role files), .rh/CHECKLIST.md",
+        "create .rh/HANDOFF.md (empty — the next session's to-do is written at session end)",
     ]
 
     # Sensitive existing files
@@ -241,6 +242,11 @@ def cmd_init(args, root: Path):
         (d / ".gitkeep").write_text("")
     # The Orchestrator's to-do list, checked against the state we just wrote.
     checklist_file, checklist_data = checklist_mod.write_checklist(root, env)
+    # Empty at init: the handoff is written only when a session ends, never
+    # generated from STATUS/PLAN (rule 14).
+    handoff_file = d / "HANDOFF.md"
+    if not handoff_file.exists():
+        handoff_file.write_text("", encoding="utf-8")
     if getattr(args, "json", False):
         ui.json_out(
             {
@@ -254,6 +260,7 @@ def cmd_init(args, root: Path):
                 "env_json": str(env_file),
                 "agents_written": [str(p) for p in agents_written],
                 "checklist": str(checklist_file),
+                "handoff": str(handoff_file),
                 "pending": checklist_data["pending"],
             }
         )
@@ -278,6 +285,9 @@ def cmd_init(args, root: Path):
     print(
         f"  {ui.colorize('✓', ui.GREEN)} .rh/CHECKLIST.md ({checklist_data['pending']} pending "
         f"— the Orchestrator's to-do list, read from its system prompt)"
+    )
+    print(
+        f"  {ui.colorize('✓', ui.GREEN)} .rh/HANDOFF.md (empty until a session hands work to the next)"
     )
     print(
         f"  {ui.colorize('·', ui.DIM)} .rh/ENVIRONMENT.md is written in phase 2, after the environment interview"
@@ -1769,43 +1779,52 @@ def cmd_log_tail(args, root: Path):
 
 @with_root
 def cmd_handoff(args, root: Path):
-    """`rh handoff [--file NAME]` — pack STATUS.md + PLAN.md + checklist for a fresh session."""
-    data = checklist_mod.build_checklist(root)
-    lines = [
-        f"# Handoff — {data['phase_name']} (rule 14)",
-        f"root: {root}",
-        "",
-        "## Checklist",
-    ]
-    for item in data["items"]:
-        lines.append(f"- [{item['status']}] {item['label']} ({item['ref']})")
-    lines += ["", "## ENV tail (environment notes)"]
-    lines.append(config.environment_notes(root) or "(none)")
-    for name in ("STATUS.md", "PLAN.md"):
-        if paths.rh_dir(root).exists():
-            try:
-                text = paths.artifact_path(root, name).read_text(encoding="utf-8")
-            except OSError:
-                text = "(missing)"
-        else:
-            text = "(missing)"
-        lines += ["", f"## {name}", text or "(empty)"]
-    out = "\n".join(lines) + "\n"
-    fname = getattr(args, "file", None) or ".rh/HANDOFF.md"
-    dest = root / fname if not fname.startswith("/") else Path(fname)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(out, encoding="utf-8")
+    """`rh handoff [--clear]` — show (or empty) the next-session handoff.
+
+    The Orchestrator writes `.rh/HANDOFF.md` at the end of a session: what the
+    next session must do first. rh never generates it from STATUS/PLAN — a
+    handoff is a decision, not a dump. `--clear` empties it after it was read.
+    """
+    dest = paths.rh_dir(root) / "HANDOFF.md"
+    if not paths.rh_dir(root).exists():
+        print(
+            ui.colorize(
+                f"✗ not initialized: {root} has no .rh/ — run `rh init` first", ui.RED
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    if getattr(args, "clear", False) and not getattr(args, "dry_run", False):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("", encoding="utf-8")
+    try:
+        text = dest.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    pending = bool(text.strip())
     if getattr(args, "json", False):
         ui.json_out(
-            {"file": str(dest), "phase": data["phase_name"], "pending": data["pending"]}
+            {
+                "file": str(dest),
+                "pending": pending,
+                "text": text if pending else "",
+                "cleared": bool(getattr(args, "clear", False)),
+            }
         )
         return 0
-    print(
-        ui.colorize(
-            f"✓ wrote {dest} — start a fresh session and read it first (rule 14)",
-            ui.GREEN,
+    if getattr(args, "clear", False):
+        print(ui.colorize(f"✓ cleared {dest} — read it first next time", ui.GREEN))
+        return 0
+    if not pending:
+        print(
+            ui.colorize(
+                f"{dest} is empty — nothing handed to the next session.",
+                ui.DIM,
+            )
         )
-    )
+        return 0
+    print(ui.colorize(f"=== {dest} (next session) ===", ui.BOLD))
+    print(text.rstrip())
     return 0
 
 
@@ -2363,10 +2382,12 @@ def build_parser():
 
     s = sub.add_parser(
         "handoff",
-        help="pack STATUS + PLAN + checklist for a fresh session (rule 14)",
+        help="show (or `--clear`) the next-session handoff written by the Orchestrator (rule 14)",
         parents=[common],
     )
-    s.add_argument("--file", default=None, help="output file (default: .rh/HANDOFF.md)")
+    s.add_argument(
+        "--clear", action="store_true", help="empty .rh/HANDOFF.md after reading it"
+    )
     s.set_defaults(func=cmd_handoff)
 
     s = sub.add_parser(

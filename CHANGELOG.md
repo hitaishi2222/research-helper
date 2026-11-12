@@ -4,6 +4,35 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.1.7] — 2026-11-12
+
+Project-scoped agent names, a purpose question at intake, and a handoff that is
+authored at session end instead of generated.
+
+### Added
+
+- **`{project}` placeholder and `rh-<project>-<role>` pane names.** Two projects
+  can run at the same time, so `agents.spawn` now names every pane/window with the
+  project slug: `tmux new-window -n rh-{project}-{agent} -c {root} {command}`
+  (e.g. `rh-optics-researcher`). The spawn prompt tells each agent the name it is
+  addressed by, and SKILL.md rule 15 makes it a rule. The old `rh-{agent}` template
+  updates in the README, `examples/` and `rh env list` help.
+- **`## Purpose` in `PROBLEM.md`.** Phase 1 now starts by asking why this work and
+  what it is for (reproduce a reference, check data, a Q1 submission, a reproduction,
+  answering a reviewer …) — it decides what "done" means. `rh info PROBLEM.md`, the
+  checklist (`content-problem-purpose`) and the phase-1 gate (seven sections) agree.
+- **`rh handoff` shows the next-session handoff; `rh handoff --clear` empties it.**
+  `.rh/HANDOFF.md` is created empty by `rh init`, written by the Orchestrator when a
+  session ends (what to do first, what to watch out for), read by `rh resume` only
+  when it has content, then cleared. `rh` no longer generates a handoff pack from
+  `STATUS.md`/`PLAN.md`/checklist — a handoff is a decision about the next move.
+
+### Changed
+
+- SKILL.md §5 gained a step-by-step spawn protocol (verify root, preview by name,
+  open, address by `rh-<project>-<role>`, close), plus the handoff template in §8.
+  The orchestrator role scaffold carries the same rules.
+
 ## [0.1.6] — 2026-11-10
 
 A fifth task state for plans that die, role files that arrive populated, and the

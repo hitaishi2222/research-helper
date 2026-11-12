@@ -21,7 +21,7 @@ rh env set \
   "agents.commands.researcher=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --append-system-prompt {agent_file} {prompt}" \
   "agents.commands.critique=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --append-system-prompt {agent_file} {prompt}" \
   "agents.commands.default=pi --model {model} --thinking {thinking} $SKILL_FLAG {skills} --append-system-prompt {agent_file} {prompt}" \
-  'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
 
 # The same selection drives `rh resume`: model + thinking level from
 # agents.roles.orchestrator, skills from agents.skills.

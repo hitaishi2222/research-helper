@@ -17,6 +17,8 @@ Placeholders understood in a command template:
   {agent_file_contents}  contents of `.rh/agents/<role>.md` inline (for harnesses
                     that take the text, not a path)
   {root} {name}     project root, project name (from .rh/env.json)
+  {project}         project-name slug for pane/window names, so two projects
+                    never fight over `rh-<role>` (`rh-{project}-{agent}`)
   {provider} {model} {thinking}   from `agents.roles.<role>`
   {skills}          comma-joined `agents.skills`
   {skills:list}     ONE token per skill, no flag attached (bare token only; for
@@ -64,6 +66,7 @@ PLACEHOLDERS = (
     "agent_file_contents",
     "root",
     "name",
+    "project",
     "provider",
     "model",
     "thinking",
@@ -100,6 +103,11 @@ def substitute(
         return m.group(0)
 
     return _PLACEHOLDER.sub(repl, text)
+
+
+def project_slug(env: dict) -> str:
+    """Short project name for backend pane/window names (`rh-<project>-<role>`)."""
+    return slugify(str((env.get("project") or {}).get("name") or ""))
 
 
 def role_spec(env: dict, role: str) -> dict:
@@ -165,6 +173,7 @@ def launch_plan(
         "agent_file_contents": agent_file_contents,
         "root": str(root),
         "name": str((env.get("project") or {}).get("name") or ""),
+        "project": project_slug(env),
         "provider": spec["provider"],
         "model": spec["model"],
         "thinking": spec["thinking"],
@@ -350,6 +359,7 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
             "agent": role,
             "root": str(root),
             "name": str((env.get("project") or {}).get("name") or ""),
+            "project": project_slug(env),
             "prompt_file": plan.get("prompt_file", ""),
             "provider": plan.get("provider", ""),
             "model": plan.get("model", ""),
@@ -535,6 +545,7 @@ def build_role_prompt(
     spec = role_spec(env, role)
     skills = skills_for(env)
     project_name = (env.get("project") or {}).get("name") or "untitled"
+    pane_name = f"rh-{project_slug(env)}-{role}"
     current = store.current_phase()
     gate = config.phase_gate(root, env)
     model_line = (
@@ -546,6 +557,7 @@ def build_role_prompt(
         model_line += f" (thinking: {spec['thinking']})"
     lines = [
         f"You are the {role.upper()} agent for the research project '{project_name}'.",
+        f"Your name in the backend is `{pane_name}` — the Orchestrator addresses you by it.",
         f"Project root (verify you are here before writing anything): {root}",
         f"Session model: {model_line}",
         f"Role file: {agent_path} — your tailored job description; follow it.",

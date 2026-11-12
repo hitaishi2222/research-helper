@@ -455,6 +455,57 @@ def test_gate_check_and_log_tail_and_handoff(tmp_path, capsys):
     assert (tmp_path / ".rh" / "HANDOFF.md").exists()
 
 
+def test_handoff_is_authored_not_generated(tmp_path, capsys):
+    """init leaves it empty; `rh handoff` shows it and never packs STATUS/PLAN."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    handoff = tmp_path / ".rh" / "HANDOFF.md"
+    assert handoff.exists() and handoff.read_text() == ""
+    handoff.write_text("# Handoff\n\n## Next session\n- run S07 first\n")
+    capsys.readouterr()
+    assert run(["--root", root, "handoff", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["pending"] is True and "run S07 first" in data["text"]
+    assert handoff.read_text().strip()  # shown, not overwritten with a generated pack
+    assert run(["--root", root, "handoff", "--clear"]) == 0
+    assert handoff.read_text() == ""
+
+
+def test_resume_reads_handoff_only_when_written(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.cli=sh",
+         'agents.roles.orchestrator={"provider":"x","model":"m"}'])
+    capsys.readouterr()
+    assert run(["--root", root, "resume", "--dry-run", "--json"]) == 0
+    assert "rh handoff --clear" not in payload(capsys.readouterr().out, "{")["prompt"]
+    (tmp_path / ".rh" / "HANDOFF.md").write_text("- finish S07\n")
+    capsys.readouterr()
+    assert run(["--root", root, "resume", "--dry-run", "--json"]) == 0
+    prompt = payload(capsys.readouterr().out, "{")["prompt"]
+    assert "rh handoff --clear" in prompt and "instructions the last session left" in prompt
+
+
+def test_spawn_pane_name_is_project_scoped(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "project.name=Optics Lab",
+         "agents.commands.researcher=pi --model {model} --system-prompt-file {agent_file} {prompt}",
+         "agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "do S01", "--dry-run", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["command"].startswith("tmux new-window -n rh-optics-lab-researcher ")
+    assert "rh-optics-lab-researcher" in data["prompt"]
+
+
+def test_checklist_asks_for_the_purpose(tmp_path):
+    run(["--root", str(tmp_path), "init", "--non-interactive"])
+    data = checklist.build_checklist(tmp_path)
+    item = next(i for i in data["items"] if i["id"] == "content-problem-purpose")
+    assert item["status"] in ("pending", "later")
+
+
 def test_agent_status_empty(tmp_path, capsys):
     root = str(tmp_path)
     run(["--root", root, "init"])
@@ -729,7 +780,7 @@ def test_checklist_reports_the_missing_header_part(tmp_path, capsys):
     capsys.readouterr()
     by_id = {i["id"]: i for i in checklist.build_checklist(tmp_path)["items"]}
     item = by_id["content-status-header"]
-    assert item["status"] == "pending" and "updated" in item["detail"]
+    assert item["status"] in ("pending", "later") and "updated" in item["detail"]
 
 
 def test_dry_run_writes_no_prompt_files(tmp_path, capsys):

@@ -15,5 +15,5 @@ rh env set \
   "agents.roles.orchestrator={\"provider\":\"pi\",\"model\":\"$MODEL\",\"thinking\":\"$THINKING\"}" \
   "agents.commands.orchestrator=pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}" \
   "agents.commands.default=pi --model {model} --thinking {thinking} --skill {skills} --append-system-prompt {agent_file} {prompt}" \
-  'agents.spawn=tmux new-window -n rh-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
 rh doctor

@@ -388,7 +388,7 @@ def user_plans(env: dict) -> bool:
 
     `agents.planners.models` empty (`[]`, or set with `none` / `0`) means phase 4 is
     user-authored: the user writes PLAN.md, the Orchestrator reconciles it, the user
-    approves it. `rh phase`, `rh doctor`, `rh env show` and `rh info PLAN.md` say so.
+    approves it. `rh tasks phase`, `rh doctor`, `rh env show` and `rh info PLAN.md` say so.
     """
     return not planner_models(env)
 
@@ -610,7 +610,8 @@ def harness_names() -> list[str]:
     return sorted(load_harnesses())
 
 
-def load_harnesses() -> dict:
+def _harness_data() -> dict:
+    """The whole `harnesses.json` (agent harnesses + backend pane templates)."""
     from importlib import resources
 
     try:
@@ -621,6 +622,39 @@ def load_harnesses() -> dict:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def load_harnesses() -> dict:
+    """Agent CLI start templates, keyed by harness name (the `backends` key is not one)."""
+    return {
+        k: v for k, v in _harness_data().items() if k != "backends" and isinstance(v, dict)
+    }
+
+
+def load_backends() -> dict:
+    """Pane templates per backend: {name: {bin, spawn}} — data, never code."""
+    backends = _harness_data().get("backends")
+    if not isinstance(backends, dict):
+        return {}
+    return {k: v for k, v in backends.items() if isinstance(v, dict)}
+
+
+def apply_backend(env: dict, name: str) -> bool:
+    """Fill a blank `agents.spawn` from the backend's pane template.
+
+    Like `apply_harness`: a template the user already wrote is never replaced,
+    and an unknown or blank backend leaves the config untouched. Returns True
+    when a template was known.
+    """
+    spec = load_backends().get((name or "").strip().lower())
+    if not isinstance(spec, dict) or not str(spec.get("spawn") or "").strip():
+        return False
+    agents = env.get("agents")
+    if not isinstance(agents, dict):
+        agents = env["agents"] = {}
+    if not str(agents.get("spawn") or "").strip():
+        agents["spawn"] = spec["spawn"]
+    return True
 
 
 def apply_harness(env: dict, name: str) -> bool:

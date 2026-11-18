@@ -7,13 +7,14 @@ Commands:
   rh add log --role ROLE --title TITLE [-m BODY]
   rh add task TITLE [--id ID] [--phase N] [--owner ROLE] [--state S] [--verify CMD] [--deliverable FILE] [--subtask TEXT ...]
   rh search <query> [--max N]
-  rh tasks [--phase N] [--state S]      # all tasks + subtasks + status
-  rh tasks set <id> {idle|working|complete}
+  rh tasks [--phase N] [--state S] [--cancelled]   # the board (cancelled in one footer line)
+  rh tasks set <id> {idle|working|complete|cancelled}
+  rh tasks phase [0-9]    # show the current phase + its exit gate, or set it (gated)
   rh status [--json]
-  rh workflow [--mermaid] [--write]
-  rh phase [0-9]          # show the current phase + its exit gate, or set it (gated)
+  rh workflow [--tools|--example] [--png|--svg] [--no-render]
   rh resume / rh -r       # exec the orchestrator (model + thinking from .rh/env.json) here
   rh spawn <role> [prompt] ...   # open another role agent with the env.json command
+  rh agent list|info|write|status   # role files (.rh/agents/<role>.md) and running agents
   rh info <FILE.md>       # what that artifact is for, who owns it, its sections
   rh skill install [--dest DIR] [--force]
   rh describe   # AI-friendly map: phases, layout, env schema (decisions you must surface)
@@ -23,14 +24,17 @@ Global flags: --root DIR, --json (machine-readable).
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shlex
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Annotated
 
+import typer
+from rich.markdown import Markdown
 from rich.prompt import Prompt
 
 from . import __version__, config, paths, ui, workflow
@@ -232,6 +236,9 @@ def cmd_init(args, root: Path):
                 ui.YELLOW,
             )
         )
+    # A blank agents.spawn takes the chosen backend's pane template; a template
+    # the user already wrote is kept, same rule as the harness commands above.
+    config.apply_backend(env, str((env.get("agents") or {}).get("backend") or ""))
     config.save_env(root, env)
 
     # Default role files: every role gets a scaffold to tailor with the user
@@ -641,10 +648,17 @@ def cmd_env_show(args, root: Path):
 @with_root
 def cmd_env_list(args, root: Path):
     if getattr(args, "json", False):
-        for key, kind, choices, help_text in config.ENV_SCHEMA:
-            ui.json_out(
-                {"key": key, "kind": kind, "choices": list(choices), "help": help_text}
-            )
+        ui.json_out(
+            [
+                {
+                    "key": key,
+                    "kind": kind,
+                    "choices": list(choices),
+                    "help": help_text,
+                }
+                for key, kind, choices, help_text in config.ENV_SCHEMA
+            ]
+        )
         return 0
     rows = [
         [key, kind, " ".join(str(c) for c in choices) or "—", help_text]
@@ -700,10 +714,12 @@ def cmd_env_set(args, root: Path):
             continue
     problems = config.validate(env)
     if problems:
-        print(ui.colorize("Config problems (will still write):", ui.YELLOW))
+        # --json keeps stdout to one document: the warning is prose, so it goes to stderr
+        out = sys.stderr if getattr(args, "json", False) else sys.stdout
+        print(ui.colorize("Config problems (will still write):", ui.YELLOW), file=out)
         for p in problems:
-            print(f"  - {p}")
-        print()
+            print(f"  - {p}", file=out)
+        print(file=out)
     config.save_env(root, env)
     if getattr(args, "json", False):
         ui.json_out(env)
@@ -729,18 +745,25 @@ def cmd_add(args, root: Path):
         store = tasks_mod.TaskStore(root)
         phase = args.phase if args.phase is not None else store.current_phase()
         deps = [d.strip() for d in (args.depends_on or "").split(",") if d.strip()]
-        task = store.add(
-            args.heading,
-            task_id=args.id,
-            phase=phase,
-            owner=args.owner,
-            state=args.state,
-            deliverable=args.deliverable,
-            verify=args.verify,
-            depends_on=deps,
-            kind=args.kind,
-            subtasks=args.subtask,
-        )
+        try:
+            task = store.add(
+                args.heading,
+                task_id=args.id,
+                phase=phase,
+                owner=args.owner,
+                state=args.state,
+                deliverable=args.deliverable,
+                verify=args.verify,
+                depends_on=deps,
+                kind=args.kind,
+                subtasks=args.subtask,
+            )
+        except ValueError as exc:  # duplicate id, bad state
+            print(ui.colorize(f"✗ {exc}", ui.RED), file=sys.stderr)
+            return 1
+        if getattr(args, "json", False):
+            ui.json_out(task)
+            return 0
         print(
             ui.colorize(
                 f"✓ task {task['id']} ({task['state']}, {tasks_mod.phase_name(phase)})",
@@ -849,7 +872,12 @@ def cmd_tasks(args, root: Path):
     env = config.load_env(root)
     current = store.current_phase()
     summary = store.summary()
-    tasks = store.list(phase=args.phase, state=args.state)
+    # Cancelled work is decided, not pending: it stays out of the board unless
+    # asked for, so the table only ever shows work that is still in play.
+    shown_state = "cancelled" if getattr(args, "cancelled", False) else args.state
+    tasks = store.list(phase=args.phase, state=shown_state)
+    if not getattr(args, "cancelled", False):
+        tasks = [t for t in tasks if t["state"] != "cancelled"]
     groups = group_tasks(tasks)
     # phase gate (SKILL.md §3): warnings when the pipeline is skipped
     gate = config.phase_gate(root, env)
@@ -870,7 +898,6 @@ def cmd_tasks(args, root: Path):
     print(
         f"{ui.bar(summary['pct'])}  {summary['complete']}/{summary['total']} tasks complete · "
         f"{summary['working']} working · {summary['idle']} idle"
-        + (f" · {summary['cancelled']} cancelled" if summary["cancelled"] else "")
     )
     if summary["subtasks_total"]:
         sc = summary["subtasks_complete"]
@@ -888,11 +915,23 @@ def cmd_tasks(args, root: Path):
         )
         print()
     if not tasks:
-        print(
-            ui.colorize(
-                'No tasks yet — `rh add task "..."` (repeatable `--subtask`).', ui.DIM
+        # An empty view is not an empty board: cancelled work still needs the
+        # pointer to `-c`, which is the only way back to it.
+        if getattr(args, "cancelled", False):
+            print(ui.colorize("No cancelled tasks — `rh tasks` shows the board.", ui.DIM))
+        elif summary["cancelled"] and not getattr(args, "cancelled", False):
+            print(
+                ui.colorize(
+                    f"{summary['cancelled']} tasks cancelled — check with `rh tasks -c`",
+                    ui.DIM,
+                )
             )
-        )
+        elif not summary["cancelled"]:
+            print(
+                ui.colorize(
+                    'No tasks yet — `rh add task "..."` (repeatable `--subtask`).', ui.DIM
+                )
+            )
         return 0
     # one flat table — the state column replaces the old Draft/Active/Complete lanes
     rows = [
@@ -905,6 +944,14 @@ def cmd_tasks(args, root: Path):
         for t in tasks
     ]
     print(ui.table(["id", "state", "phase", "title"], rows))
+    if summary["cancelled"] and not getattr(args, "cancelled", False):
+        print()
+        print(
+            ui.colorize(
+                f"{summary['cancelled']} tasks cancelled — check with `rh tasks -c`",
+                ui.DIM,
+            )
+        )
     return 0
 
 
@@ -1173,7 +1220,7 @@ def cmd_phase_set(args, root: Path):
         return tasks_mod.phase_exit(phase, plans)
 
     if args.phase is None or args.phase == current:
-        # `rh phase` — the phase is a gate, not a badge: show what it costs to leave it
+        # `rh tasks phase` — the phase is a gate, not a badge: show what it costs to leave it
         if getattr(args, "json", False):
             ui.json_out(
                 {
@@ -1200,7 +1247,7 @@ def cmd_phase_set(args, root: Path):
                 )
             print(
                 ui.colorize(
-                    "  set it with `rh phase N` (gated; --force records a waiver)",
+                    "  set it with `rh tasks phase N` (gated; --force records a waiver)",
                     ui.DIM,
                 )
             )
@@ -1542,16 +1589,20 @@ def cmd_doctor(args, root: Path):
 
 
 @with_root
-def cmd_agents(args, root: Path):
-    """`rh agents [ROLE]` — list or show the per-role agent files (.rh/agents/<role>.md)."""
+def cmd_agent(args, root: Path):
+    """`rh agent {list|info|write|status}` — the per-role agent files."""
     role = (getattr(args, "role", None) or "").strip().lower()
-    if getattr(args, "write", False):
+    if args.mode == "write":
         if role:
+            before = agents_mod.read_role(root, role)
             p = agents_mod.write_one(root, role)
             if getattr(args, "json", False):
                 ui.json_out({"written": str(p)})
                 return 0
-            print(ui.colorize(f"✓ wrote {p}", ui.GREEN))
+            if before is not None and before == p.read_text(encoding="utf-8"):
+                print(ui.colorize(f"↷ kept {p} (edited — not overwritten)", ui.DIM))
+            else:
+                print(ui.colorize(f"✓ wrote {p}", ui.GREEN))
             return 0
         written = agents_mod.write_all(root)
         if getattr(args, "json", False):
@@ -1564,7 +1615,7 @@ def cmd_agents(args, root: Path):
         for pth in written:
             print(ui.colorize(f"✓ wrote {pth}", ui.GREEN))
         return 0
-    if role:
+    if args.mode == "info":
         info = agents_mod.role_file_info(root, role)
         content = agents_mod.read_role(root, role)
         if getattr(args, "json", False):
@@ -1573,15 +1624,20 @@ def cmd_agents(args, root: Path):
         if content is None:
             print(
                 ui.colorize(
-                    f"⏳ no .rh/agents/{role}.md yet — `rh agents {role} --write` scaffolds it; the Orchestrator fills it in with the user.",
+                    f"⏳ no .rh/agents/{role}.md yet — `rh agent write {role}` scaffolds it; the Orchestrator fills it in with the user.",
                     ui.YELLOW,
                 )
             )
             return 0
-        print(content)
+        print(ui._render(Markdown(content)))
         return 0
-    # list
+    # list: starter roles + files + roles the config gives a launch command
     roles = agents_mod.list_roles(root)
+    commands = (config.load_env(root).get("agents") or {}).get("commands") or {}
+    if isinstance(commands, dict):
+        roles = sorted(
+            set(roles) | {str(k).lower() for k in commands if str(k) != "default"}
+        )
     if getattr(args, "json", False):
         ui.json_out([agents_mod.role_file_info(root, r) for r in roles])
         return 0
@@ -1595,7 +1651,7 @@ def cmd_agents(args, root: Path):
         info = agents_mod.role_file_info(root, r)
         mark = "✓" if info["exists"] else "·"
         print(
-            f"  {mark} {ui.colorize(r, ui.CYAN):12} {info['file']} ({'exists' if info['exists'] else 'missing — run `rh agents --write`'})"
+            f"  {mark} {ui.colorize(r, ui.CYAN):12} {info['file']} ({'exists' if info['exists'] else f'missing — run `rh agent write {r}`'})"
         )
     print(
         ui.colorize(
@@ -1725,25 +1781,11 @@ def cmd_agent_status(args, root: Path):
                 alive = "alive"
             except OSError:
                 alive = "dead"
+        who = f"pid={pid} ({alive})" if pid else "pane (backend-owned)"
         print(
-            f"  {r.get('role', '?'):12} pid={pid} ({alive}) model={r.get('model') or '—'} mode={r.get('mode')} ts={r.get('ts', '')}"
+            f"  {r.get('role', '?'):12} {who} model={r.get('model') or '—'} mode={r.get('mode')} ts={r.get('ts', '')}"
         )
     return 0
-
-
-@with_root
-def cmd_gate_check(args, root: Path):
-    """`rh gate check [--json]` — machine-readable gate report (same as phase_gate)."""
-    env = config.load_env(root)
-    gate = config.phase_gate(root, env)
-    if getattr(args, "json", False):
-        ui.json_out(gate)
-        return 0 if gate["ok"] else 1
-    print(ui.banner("Gate check", f"root: {root}"))
-    print(f"  phase: {gate['phase']}  ok: {gate['ok']}")
-    for p in gate["problems"]:
-        print(ui.colorize(f"  - {p}", ui.YELLOW))
-    return 0 if gate["ok"] else 1
 
 
 @with_root
@@ -1862,7 +1904,7 @@ def cmd_spawn(args, root: Path):
         print(
             ui.colorize(
                 f"  define your own: rh env set agents.commands.{role}='pi --model {{model}} --append-system-prompt {{agent_file}} {{prompt}}' "
-                f"and write .rh/agents/{role}.md (rh agents {role} --write scaffolds it)",
+                f"and write .rh/agents/{role}.md (rh agent write {role} scaffolds it)",
                 ui.DIM,
             ),
             file=sys.stderr,
@@ -1921,6 +1963,7 @@ def cmd_spawn(args, root: Path):
                 "mode": preview["mode"],
                 "log": preview["log"],
                 "source": plan["source"],
+                "spawn_source": preview.get("source", ""),
                 "prompt_file": str(prompt_file),
                 "prompt": prompt,
                 "model": plan["model"],
@@ -1949,7 +1992,8 @@ def cmd_spawn(args, root: Path):
     )
     print(
         f"{ui.colorize('mode:', ui.DIM)} {preview['mode']}"
-        f"  {ui.colorize('via', ui.DIM)} {plan['source'] or 'agents.cli'}"
+        f"  {ui.colorize('via', ui.DIM)} "
+        f"{preview.get('source') or plan['source'] or 'agents.cli'}"
     )
     print(f"{ui.colorize('command:', ui.DIM)} {preview['command']}")
     if preview["log"]:
@@ -1973,9 +2017,9 @@ def cmd_spawn(args, root: Path):
         print(
             ui.colorize(
                 (
-                    "✓ opened pane via agents.spawn"
+                    f"✓ opened pane via {preview.get('source') or 'agents.spawn'}"
                     if ok
-                    else "⚠ the agents.spawn command failed"
+                    else "⚠ the pane command failed"
                 )
                 + f" ({result['command']})",
                 ui.GREEN if ok else ui.YELLOW,
@@ -2108,336 +2152,434 @@ def cmd_skill_install(args):
     return 0
 
 
-class HelpfulParser(argparse.ArgumentParser):
-    """A parser that answers bad usage with the full `--help` text, nothing else."""
+# ---- CLI surface (typer) ----------------------------------------------------
+#
+# Handlers above still take an argparse-style namespace; these thin wrappers
+# adapt typer's typed parameters onto that namespace so command bodies stay
+# untouched. Every command declares --root/--json itself, because click does
+# not pass a parent group's options down to its subcommands.
 
-    def error(self, message):
-        # deliberately no "error: ..." line: bad usage just shows what --help shows
-        self.print_help()
-        self.exit(2)
+RootOpt = Annotated[
+    str | None,
+    typer.Option("--root", help="project root (default: walk up for .rh/, else cwd)"),
+]
+JsonOpt = Annotated[bool, typer.Option("--json", help="machine-readable JSON output")]
 
 
-def build_parser():
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--root",
-        default=argparse.SUPPRESS,
-        help="project root (default: walk up for .rh/, else cwd)",
-    )
-    common.add_argument(
-        "--json",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="machine-readable JSON output",
-    )
-    p = HelpfulParser(
-        prog="rh",
-        description="research-helper CLI — orchestrate a research project end to end",
-        parents=[common],
-    )
-    p.add_argument("--version", action="version", version=f"rh {__version__}")
-    p.add_argument(
-        "-r",
-        "--resume",
-        action="store_true",
-        help="shortcut for `rh resume` (spawn harness + go-forward prompt)",
-    )
-    sub = p.add_subparsers(dest="cmd", required=False)
+def _globals(ctx: typer.Context, root: str | None, as_json: bool) -> SimpleNamespace:
+    """Global options merged with whatever an outer group already accepted.
 
-    s = sub.add_parser(
-        "init",
-        help="create .rh/ layout (non-destructive; --force/--clean archive first, --dry-run previews)",
-        parents=[common],
-    )
-    s.add_argument(
-        "--clean",
-        action="store_true",
-        help="archive .rh/ (event logs, notes, env.json, tasks.json) to .rh/.bak/<timestamp>/ then recreate it",
-    )
-    s.add_argument(
-        "--force",
-        action="store_true",
-        help="archive a copy of env.json/tasks.json to .rh/.bak/<timestamp>/ before init writes",
-    )
-    s.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="preview what would be written without writing",
-    )
-    s.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="skip the questionnaire (agents/CI)",
-    )
-    s.set_defaults(func=cmd_init)
+    Click does not pass a group's options to its subcommands, so every command
+    and every group re-declares --root/--json and merges them here; the root
+    command's values are the base case.
+    """
+    base = ctx.obj if ctx.obj is not None else SimpleNamespace(root=None, json=False)
+    return SimpleNamespace(root=root or base.root, json=as_json or base.json)
 
-    s = sub.add_parser("env", help="environment config", parents=[common])
-    esub = s.add_subparsers(dest="e", required=True)
-    esub.add_parser("show", parents=[common]).set_defaults(func=cmd_env_show)
-    esub.add_parser("list", parents=[common]).set_defaults(func=cmd_env_list)
-    sp = esub.add_parser("set", parents=[common])
-    sp.add_argument("pairs", nargs="*", metavar="KEY=VALUE")
-    sp.set_defaults(func=cmd_env_set)
 
-    s = sub.add_parser("add", help="append under heading/DOI", parents=[common])
-    s.add_argument("target", choices=list(add_mod.ADD_TARGETS))
-    s.add_argument("heading", help="heading or DOI")
-    s.add_argument("-m", "--message", default=None)
-    s.add_argument("--file", default=None, help="note filename (md)")
-    s.add_argument("--role", default=None)
-    s.add_argument("--title", default=None)
-    s.add_argument("--id", default=None)
-    s.add_argument(
-        "--phase", type=int, default=None, help="default: current project phase"
-    )
-    s.add_argument("--owner", default="researcher")
-    s.add_argument("--state", default="idle", choices=list(tasks_mod.TASK_STATES))
-    s.add_argument("--deliverable", default="")
-    s.add_argument("--verify", default="")
-    s.add_argument(
-        "--depends-on",
-        dest="depends_on",
-        default="",
-        help="comma-separated task ids this depends on",
-    )
-    s.add_argument("--kind", default="build", choices=["build", "spike"])
-    s.add_argument(
-        "--subtask",
-        action="append",
-        default=[],
-        metavar="TEXT",
-        help="repeatable subtask line",
-    )
-    s.set_defaults(func=cmd_add)
+def _ns(ctx: typer.Context, root: str | None, as_json: bool, **kw) -> SimpleNamespace:
+    return SimpleNamespace(**_globals(ctx, root, as_json).__dict__, **kw)
 
-    s = sub.add_parser("search", help="local search (rg or python)", parents=[common])
-    s.add_argument("query")
-    s.add_argument("--max", type=int, default=40)
-    s.set_defaults(func=cmd_search)
 
-    s = sub.add_parser(
-        "tasks",
-        help="task board + progress; `rh tasks set <id> <state>`",
-        parents=[common],
-    )
-    s.add_argument("--phase", type=int, default=None)
-    s.add_argument("--state", default=None, choices=list(tasks_mod.TASK_STATES))
-    tsub = s.add_subparsers(dest="t", required=False)
-    ts = tsub.add_parser("set", parents=[common])
-    ts.add_argument("id")
-    ts.add_argument("state", choices=list(tasks_mod.TASK_STATES))
-    ts.set_defaults(func=cmd_task_set)
-    s.set_defaults(func=cmd_tasks)
+def _group_globals(
+    ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False
+) -> None:
+    """Group-level --root/--json, so `rh env --root X show` works too."""
+    ctx.obj = _globals(ctx, root, as_json)
 
-    s = sub.add_parser("status", help="project status", parents=[common])
-    s.set_defaults(func=cmd_status)
 
-    s = sub.add_parser(
-        "workflow",
-        help="display the agent-authored .rh/workflow.mmd (ascii in-terminal)",
-        parents=[common],
-    )
-    s.add_argument(
-        "--example",
-        action="store_true",
-        help="print a starter mermaid source (from the task board) the agent can save as .rh/workflow.mmd",
-    )
-    s.add_argument(
-        "--phases",
-        action="store_true",
-        help="with --example: use the constant SKILL.md phase pipeline",
-    )
-    s.add_argument("--tools", action="store_true", help="list installed renderers")
-    s.add_argument("--png", action="store_true", help="render png from workflow.mmd")
-    s.add_argument("--svg", action="store_true", help="render svg from workflow.mmd")
-    s.add_argument("--no-render", action="store_true", help="skip ascii display")
-    s.set_defaults(func=cmd_workflow)
+def _pick(value, allowed, name: str):
+    """Reject a value outside `allowed` as a usage error (help + exit 2)."""
+    if value is not None and value not in allowed:
+        raise typer.BadParameter(
+            f"{value!r} is not one of: {', '.join(allowed)}", param_hint=f"--{name}"
+        )
+    return value
 
-    s = sub.add_parser(
-        "phase",
-        help="show the current phase + exit gate, or set it: rh phase [0-9] (gated)",
-    )
-    s.add_argument(
-        "set",
-        nargs="?",
-        default=None,
-        choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
-    )
-    s.add_argument(
-        "--force",
-        action="store_true",
-        help="jump despite unmet gates (waiver goes in STATUS.md)",
-    )
-    s.set_defaults(func=cmd_phase_set)
 
-    s = sub.add_parser("describe", help="AI map of the tool", parents=[common])
-    s.set_defaults(func=cmd_describe)
+def _version_call(value: bool) -> None:
+    if value:
+        print(f"rh {__version__}")
+        raise typer.Exit()
 
-    s = sub.add_parser(
-        "resume",
-        help="run the orchestrator here (model + thinking from .rh/env.json)",
-        parents=[common],
-    )
-    s.add_argument(
-        "--cli",
-        dest="cli",
-        default=None,
-        help="fallback agent binary when env.json has no agents.commands (default: config agents.cli, else ask)",
-    )
-    s.add_argument(
-        "--prompt",
-        default=None,
-        help="extra user instructions appended to the go-forward prompt",
-    )
-    s.add_argument(
-        "--prompt-file",
-        dest="prompt_file",
-        default=None,
-        help="read the extra instructions from a markdown file (examples/prompts/orchestrator.md)",
-    )
-    s.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="show the resolved command + prompt without spawning",
-    )
-    s.set_defaults(func=cmd_resume)
 
-    s = sub.add_parser(
-        "spawn",
-        help="open a role agent with the env.json command, or a shell terminal "
-        "(`rh spawn terminal <cmd>`)",
-        parents=[common],
-    )
-    s.add_argument(
-        "agent",
-        help="role (a .rh/agents/<role>.md file and/or agents.commands.<role> key), "
-        "e.g. researcher; 'terminal' means `rh spawn terminal <cmd>` for a shell pane",
-    )
-    s.add_argument(
-        "text",
-        nargs="*",
-        help="instructions for that agent (joined into one prompt); "
-        "for `spawn terminal` it is the command to run",
-    )
-    s.add_argument(
-        "--prompt", default=None, help="instructions instead of the positional form"
-    )
-    s.add_argument(
-        "--prompt-file",
-        dest="prompt_file",
-        default=None,
-        help="read the instructions from a markdown file (examples/prompts/*.md)",
-    )
-    s.add_argument(
-        "--inline",
-        action="store_true",
-        help="run the agent in this terminal instead of a new pane/process",
-    )
-    s.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print the command + role prompt without starting anything",
-    )
-    s.add_argument(
-        "--split",
-        default=None,
-        choices=["vertical", "horizontal", "window"],
-        help="pane layout override for this spawn (default: agents.split)",
-    )
-    s.add_argument(
-        "--force",
-        action="store_true",
-        help="ignore agents.count budget (waiver → STATUS.md)",
-    )
-    s.set_defaults(func=cmd_spawn)
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=False,
+    help="research-helper CLI — orchestrate a research project end to end",
+)
 
-    s = sub.add_parser(
-        "doctor",
-        help="verify the binaries, shells, templates and role files env.json names",
-        parents=[common],
-    )
-    s.set_defaults(func=cmd_doctor)
 
-    s = sub.add_parser(
-        "agent", help="agent helpers: `rh agent status`", parents=[common]
-    )
-    asub = s.add_subparsers(dest="a", required=True)
-    ast = asub.add_parser("status", parents=[common])
-    ast.set_defaults(func=cmd_agent_status)
+@app.callback()
+def _root(
+    ctx: typer.Context,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+    version: Annotated[
+        bool,
+        typer.Option("--version", is_eager=True, callback=_version_call,
+                     help="show the version and exit"),
+    ] = False,
+):
+    _group_globals(ctx, root, as_json)
 
-    s = sub.add_parser(
-        "gate", help="`rh gate check` — machine-readable gate report", parents=[common]
-    )
-    gsub = s.add_subparsers(dest="g", required=True)
-    gc = gsub.add_parser("check", parents=[common])
-    gc.set_defaults(func=cmd_gate_check)
 
-    s = sub.add_parser(
-        "log", help="`rh log tail [N]` — newest §7 event logs", parents=[common]
+@app.command("init", help="create .rh/ layout (non-destructive; --force/--clean archive first, --dry-run previews)")
+def init(
+    ctx: typer.Context,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+    clean: Annotated[bool, typer.Option("--clean")] = False,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
+):
+    raise typer.Exit(
+        cmd_init(
+            _ns(
+                ctx, root, as_json,
+                clean=clean, force=force, dry_run=dry_run,
+                non_interactive=non_interactive,
+            )
+        )
     )
-    lsub = s.add_subparsers(dest="l", required=True)
-    lt = lsub.add_parser("tail", parents=[common])
-    lt.add_argument("n", nargs="?", default=None, help="how many logs (default 20)")
-    lt.set_defaults(func=cmd_log_tail)
 
-    s = sub.add_parser(
-        "handoff",
-        help="show (or `--clear`) the next-session handoff written by the Orchestrator (rule 14)",
-        parents=[common],
-    )
-    s.add_argument(
-        "--clear", action="store_true", help="empty .rh/HANDOFF.md after reading it"
-    )
-    s.set_defaults(func=cmd_handoff)
 
-    s = sub.add_parser(
-        "agents",
-        help="list / show / write the per-role agent files (.rh/agents/<role>.md)",
-        parents=[common],
-    )
-    s.add_argument(
-        "role", nargs="?", default=None, help="one role to show (e.g. researcher)"
-    )
-    s.add_argument(
-        "--write",
-        action="store_true",
-        help="write default role files (all roles, or just ROLE when given)",
-    )
-    s.set_defaults(func=cmd_agents)
+env_app = typer.Typer(help="environment config", no_args_is_help=False)
+app.add_typer(env_app, name="env")
 
-    s = sub.add_parser(
-        "info",
-        help="describe an artifact: what it is for, owner, sections, template",
-        parents=[common],
-    )
-    s.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        help="file name, e.g. PLAN.md | status | .rh/GAPS.md",
-    )
-    s.add_argument(
-        "--template", action="store_true", help="print only the template block"
-    )
-    s.set_defaults(func=cmd_info)
 
-    s = sub.add_parser(
-        "skill", help="install the bundled agent skill", parents=[common]
-    )
-    ssub = s.add_subparsers(dest="sk", required=True)
-    si = ssub.add_parser("install", parents=[common])
-    si.add_argument(
-        "--dest",
-        default=None,
-        help="the skill directory itself, e.g. ~/.agents/skills/my-name "
-        "(default: ~/.agents/skills/research-helper)",
-    )
-    si.add_argument(
-        "--force", action="store_true", help="overwrite an existing skill dir"
-    )
-    si.set_defaults(func=cmd_skill_install)
+@env_app.callback()
+def env_root(
+    ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False
+):
+    _group_globals(ctx, root, as_json)
 
-    return p
+
+@env_app.command("show", help="print the config as a table, validated")
+def env_show(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_env_show(_ns(ctx, root, as_json)))
+
+
+@env_app.command("list", help="every settable key, type, choices, help")
+def env_list(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_env_list(_ns(ctx, root, as_json)))
+
+
+@env_app.command("set", help="write KEY=VALUE ... into .rh/env.json")
+def env_set(
+    ctx: typer.Context,
+    pairs: Annotated[list[str] | None, typer.Argument()] = None,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_env_set(_ns(ctx, root, as_json, pairs=pairs or [])))
+
+
+@app.command("add", help="append under heading/DOI")
+def add(
+    ctx: typer.Context,
+    target: Annotated[str, typer.Argument(help="note|literature|layout|gaps|problem|plan|status|manuscript|task|log")],
+    heading: Annotated[str, typer.Argument(help="heading or DOI")],
+    message: Annotated[str | None, typer.Option("-m", "--message")] = None,
+    file: Annotated[str | None, typer.Option("--file")] = None,
+    role: Annotated[str | None, typer.Option("--role")] = None,
+    title: Annotated[str | None, typer.Option("--title")] = None,
+    task_id: Annotated[str | None, typer.Option("--id")] = None,
+    phase: Annotated[int | None, typer.Option("--phase")] = None,
+    owner: Annotated[str, typer.Option("--owner")] = "researcher",
+    state: Annotated[str, typer.Option("--state")] = "idle",
+    deliverable: Annotated[str, typer.Option("--deliverable")] = "",
+    verify: Annotated[str, typer.Option("--verify")] = "",
+    depends_on: Annotated[str, typer.Option("--depends-on")] = "",
+    kind: Annotated[str, typer.Option("--kind")] = "build",
+    subtask: Annotated[list[str] | None, typer.Option("--subtask")] = None,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    _pick(target, tuple(add_mod.ADD_TARGETS), "target")
+    _pick(state, tasks_mod.TASK_STATES, "state")
+    _pick(kind, ("build", "spike"), "kind")
+    raise typer.Exit(
+        cmd_add(
+            _ns(
+                ctx, root, as_json,
+                target=target, heading=heading, message=message, file=file,
+                role=role, title=title, id=task_id, phase=phase, owner=owner,
+                state=state, deliverable=deliverable, verify=verify,
+                depends_on=depends_on, kind=kind, subtask=subtask or [],
+            )
+        )
+    )
+
+
+@app.command("search", help="local search (rg or python)")
+def search(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument()],
+    max_hits: Annotated[int, typer.Option("--max")] = 40,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(
+        cmd_search(_ns(ctx, root, as_json, query=query, max=max_hits))
+    )
+
+
+tasks_app = typer.Typer(
+    help="task board + progress; `rh tasks set <id> <state>`", no_args_is_help=False
+)
+app.add_typer(tasks_app, name="tasks")
+
+
+@tasks_app.callback(invoke_without_command=True)
+def tasks_board(
+    ctx: typer.Context,
+    phase: Annotated[int | None, typer.Option("--phase")] = None,
+    state: Annotated[str | None, typer.Option("--state")] = None,
+    cancelled: Annotated[
+        bool, typer.Option("-c", "--cancelled", help="show cancelled tasks only")
+    ] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    _pick(state, tasks_mod.TASK_STATES, "state")
+    # Merge now: a subcommand (`tasks phase`, `tasks set`) inherits ctx.obj, and
+    # without this it would fall back to the cwd's project.
+    ctx.obj = _globals(ctx, root, as_json)
+    if ctx.invoked_subcommand is not None:
+        return
+    raise typer.Exit(
+        cmd_tasks(
+            _ns(ctx, root, as_json, phase=phase, state=state, cancelled=cancelled)
+        )
+    )
+
+
+@tasks_app.command("set", help="change a task or subtask state")
+def tasks_set(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(metavar="ID")],
+    state: Annotated[str, typer.Argument(metavar="STATE")],
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    _pick(state, tasks_mod.TASK_STATES, "state")
+    raise typer.Exit(
+        cmd_task_set(_ns(ctx, root, as_json, id=task_id, state=state))
+    )
+
+
+@tasks_app.command("phase", help="show the phase and its exit gate, or set it (gated)")
+def tasks_phase(
+    ctx: typer.Context,
+    phase: Annotated[
+        str | None, typer.Argument(metavar="[0-9]", help="phase to enter (gated)")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="jump despite unmet gates (waiver goes in STATUS.md)")
+    ] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    _pick(phase, tuple("0123456789"), "phase")
+    raise typer.Exit(
+        cmd_phase_set(
+            _ns(
+                ctx, root, as_json,
+                phase=int(phase) if phase is not None else None, force=force,
+            )
+        )
+    )
+
+
+@app.command("status", help="project status")
+def status(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_status(_ns(ctx, root, as_json)))
+
+
+@app.command("workflow", help="display the agent-authored .rh/workflow.mmd (ascii in-terminal)")
+def workflow_cmd(
+    ctx: typer.Context,
+    example: Annotated[bool, typer.Option("--example")] = False,
+    phases: Annotated[bool, typer.Option("--phases")] = False,
+    tools: Annotated[bool, typer.Option("--tools")] = False,
+    png: Annotated[bool, typer.Option("--png")] = False,
+    svg: Annotated[bool, typer.Option("--svg")] = False,
+    no_render: Annotated[bool, typer.Option("--no-render")] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(
+        cmd_workflow(
+            _ns(
+                ctx, root, as_json,
+                example=example, phases=phases, tools=tools,
+                png=png, svg=svg, no_render=no_render,
+            )
+        )
+    )
+
+
+@app.command("describe", help="AI map of the tool")
+def describe(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_describe(_ns(ctx, root, as_json)))
+
+
+@app.command("resume", help="run the orchestrator here (model + thinking from .rh/env.json)")
+def resume(
+    ctx: typer.Context,
+    cli: Annotated[str | None, typer.Option("--cli")] = None,
+    prompt: Annotated[str | None, typer.Option("--prompt")] = None,
+    prompt_file: Annotated[str | None, typer.Option("--prompt-file")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(
+        cmd_resume(
+            _ns(
+                ctx, root, as_json,
+                cli=cli, prompt=prompt, prompt_file=prompt_file, dry_run=dry_run,
+            )
+        )
+    )
+
+
+@app.command("spawn", help="open a role agent with the env.json command, or a shell terminal")
+def spawn(
+    ctx: typer.Context,
+    agent: Annotated[str, typer.Argument(help="role, or 'terminal' for a shell pane")],
+    text: Annotated[list[str] | None, typer.Argument(help="instructions, or the shell command")] = None,
+    prompt: Annotated[str | None, typer.Option("--prompt")] = None,
+    prompt_file: Annotated[str | None, typer.Option("--prompt-file")] = None,
+    inline: Annotated[bool, typer.Option("--inline")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    split: Annotated[str | None, typer.Option("--split")] = None,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    _pick(split, ("vertical", "horizontal", "window"), "split")
+    raise typer.Exit(
+        cmd_spawn(
+            _ns(
+                ctx, root, as_json,
+                agent=agent, text=text or [], prompt=prompt,
+                prompt_file=prompt_file, inline=inline, dry_run=dry_run,
+                split=split, force=force,
+            )
+        )
+    )
+
+
+@app.command("doctor", help="verify the binaries, shells, templates and role files env.json names")
+def doctor(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_doctor(_ns(ctx, root, as_json)))
+
+
+agent_app = typer.Typer(
+    help="role files and running agents: list, info, write, status",
+    no_args_is_help=False,
+)
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.callback()
+def agent_root(
+    ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False
+):
+    _group_globals(ctx, root, as_json)
+
+
+@agent_app.command("list", help="every role, with its file and whether it exists")
+def agent_list(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_agent(_ns(ctx, root, as_json, mode="list", role=None)))
+
+
+@agent_app.command("info", help="print one role file, rendered")
+def agent_info(
+    ctx: typer.Context,
+    role: Annotated[str, typer.Argument(help="one role, e.g. researcher")],
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_agent(_ns(ctx, root, as_json, mode="info", role=role)))
+
+
+@agent_app.command("write", help="create missing role files (edited files are kept)")
+def agent_write(
+    ctx: typer.Context,
+    role: Annotated[str | None, typer.Argument(help="one role, or every missing starter role")] = None,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_agent(_ns(ctx, root, as_json, mode="write", role=role)))
+
+
+@agent_app.command("status", help="who is running, on which model, from .rh/logs/spawns.jsonl")
+def agent_status(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    raise typer.Exit(cmd_agent_status(_ns(ctx, root, as_json)))
+
+
+log_app = typer.Typer(help="`rh log tail [N]` — newest §7 event logs", no_args_is_help=False)
+app.add_typer(log_app, name="log")
+
+
+@log_app.callback()
+def log_root(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    _group_globals(ctx, root, as_json)
+
+
+@log_app.command("tail", help="read the newest event logs")
+def log_tail(
+    ctx: typer.Context,
+    n: Annotated[int | None, typer.Argument(help="how many logs (default 20)")] = None,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_log_tail(_ns(ctx, root, as_json, n=n)))
+
+
+@app.command("handoff", help="show (or --clear) the next-session handoff written by the Orchestrator")
+def handoff(
+    ctx: typer.Context,
+    clear: Annotated[bool, typer.Option("--clear")] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_handoff(_ns(ctx, root, as_json, clear=clear)))
+
+
+@app.command("info", help="describe an artifact: what it is for, owner, sections, template")
+def info(
+    ctx: typer.Context,
+    name: Annotated[str | None, typer.Argument(help="file name, e.g. PLAN.md | status")] = None,
+    template: Annotated[bool, typer.Option("--template")] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_info(_ns(ctx, root, as_json, name=name, template=template)))
+
+
+skill_app = typer.Typer(help="install the bundled agent skill", no_args_is_help=False)
+app.add_typer(skill_app, name="skill")
+
+
+@skill_app.callback()
+def skill_root(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
+    _group_globals(ctx, root, as_json)
+
+
+@skill_app.command("install", help="copy the bundled skill into a skills directory")
+def skill_install(
+    ctx: typer.Context,
+    dest: Annotated[str | None, typer.Option("--dest")] = None,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_skill_install(_ns(ctx, root, as_json, dest=dest, force=force)))
 
 
 KNOWN_CMDS = {
@@ -2448,39 +2590,54 @@ KNOWN_CMDS = {
     "tasks",
     "status",
     "workflow",
-    "phase",
-    "plan",
     "describe",
     "resume",
     "spawn",
     "info",
     "skill",
-    "agents",
     "doctor",
     "agent",
-    "gate",
     "log",
     "handoff",
 }
 
+# Short aliases, expanded only when no explicit subcommand is named.
+ALIASES = {"-r": "resume", "--resume": "resume", "-t": "tasks"}
+
+
+def _expand_alias(argv: list[str]) -> list[str]:
+    if set(argv) & KNOWN_CMDS:
+        return argv
+    for short, cmd in ALIASES.items():
+        if short in argv:
+            return [cmd, *[a for a in argv if a != short]]
+    return argv
+
+
+def _print_help() -> None:
+    app(args=["--help"], standalone_mode=False, prog_name="rh")
+
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not (set(argv) & KNOWN_CMDS) and ("-r" in argv or "--resume" in argv):
-        argv = ["resume", *[a for a in argv if a not in ("-r", "--resume")]]
-    try:
-        args = build_parser().parse_args(argv)
-    except (
-        SystemExit
-    ) as exc:  # --help/--version and HelpfulParser.error already printed
-        return int(exc.code or 0)
-    if args.cmd is None:
-        build_parser().print_help()
+    argv = _expand_alias(argv)
+    if not argv:
+        _print_help()
         return 2
-    # `rh phase N` → phase int
-    if args.cmd == "phase":
-        args.phase = int(args.set) if args.set is not None else None
-    return args.func(args)
+    try:
+        return int(app(args=argv, standalone_mode=False, prog_name="rh") or 0)
+    except typer.TyperException as exc:  # usage error: full help, exit 2
+        ctx = getattr(exc, "ctx", None)
+        if ctx is not None:
+            print(ctx.get_help())
+        else:
+            print(exc.format_message(), file=sys.stderr)
+            _print_help()
+        return 2
+    except typer.Exit as exc:  # --help / --version / explicit exits
+        return int(exc.exit_code)
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

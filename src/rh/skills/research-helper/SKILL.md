@@ -27,11 +27,13 @@ Nothing here is advice. If a rule cannot be followed, stop and ask.
 8. **"Done" requires proof.** Tests green, plan steps checked, Critique has no open blocking
    question. A claim without evidence is rework.
 9. **`STATUS.md` is the truth, and it is your own work.** Update it after every step and before
-   every question to the user. Never delegate that update.
+   every question to the user. Never delegate that update. It is current state, not a diary: keep
+   the last ten history entries and move the older lines into the log of the step they belong to
+   (§7).
 10. **Re-read `.rh/env.json` and the environment record at the start of every phase.** Never cache
     them: a version recorded in phase 2 may have moved.
-11. **The user may waive a rule.** Name the waiver in `STATUS.md` history with the rule number, and
-    in the manuscript's limitations. Without one, an unmet rule stops the phase.
+11. **The user may waive a rule.** Name the waiver under `waivers:` in `STATUS.md` with the rule
+    number, and in the manuscript's limitations. Without one, an unmet rule stops the phase.
 12. **Verify the project path before opening an agent.** Resolve the root, confirm `.rh/` and
     `.rh/env.json` are there, state the path to the user, then spawn. Never open an agent in
     `$HOME`, a parent directory, or a neighbouring project.
@@ -296,7 +298,7 @@ plan gate (rule 14).
 
 **No planner configured** (`agents.planners.models = none` or empty) means the user is the planner.
 They write `PLAN.md`; you reconcile it against `PROBLEM.md`, create its tasks with `rh add task`,
-and the user approves it. `rh phase` states this gate in those words.
+and the user approves it. `rh tasks phase` states this gate in those words.
 
 The merged `PLAN.md` is ordered steps, each with an id, the action, the owner role, the deliverable
 file, the verification command or check, dependencies, and the estimated risk. It links the tooling
@@ -310,8 +312,11 @@ implementation before that yes.
 ### Phase 5, STATE: `STATUS.md`, `.rh/logs/`
 
 `STATUS.md` holds the current phase and step id, the agent roster (role, model, backend window),
-blockers, open questions aimed at the user, and a timestamped one-line history. Edit it on every
-step transition. You do this yourself, never a spawned agent (rule 9).
+blockers, open questions aimed at the user, waivers by rule number, and a one-line history of the
+last ten step transitions, newest first. Edit it on every step transition. You do this yourself,
+never a spawned agent (rule 9). It is current state, not a diary: when history grows past ten,
+move the dropped lines into that step's event log under `.rh/logs/` (§7) instead of keeping the
+whole diary here.
 
 Exit gate: it describes reality. Re-read it and check before answering any "where are we" question.
 
@@ -406,9 +411,9 @@ Critique gets its own agent from count 3 up, because a veto needs an independent
 hat's work would be reviewed by the same context that did the work, say so in `STATUS.md`: the user
 must know the review was not independent.
 
-`rh` hardcodes no role information. A role is its file, `.rh/agents/<role>.md` (see `rh agents`),
+`rh` hardcodes no role information. A role is its file, `.rh/agents/<role>.md` (see `rh agent list`),
 which carries the role's rules and scope. `rh init` writes the starter roles, each with its §5 scope to narrow with the user; add a later one with
-`rh agents <role> --write`, edit it with the user's approval, and record its launch command as
+`rh agent write <role>`, edit it with the user's approval, and record its launch command as
 `agents.commands.<role>` in `.rh/env.json`. `rh spawn <role>` then runs exactly that command and
 puts the role file in its `{agent_file}` slot. For a plain shell rather than an agent, use
 `rh spawn terminal <cmd>`: it runs in `agents.shell` (or `$SHELL`) and follows `agents.split`,
@@ -497,7 +502,10 @@ phase: 6 IMPLEMENT | step: S07 | updated: <ISO timestamp>
 agents: orchestrator=<model>  researcher=<model>  (backend: tmux window rh-<project>-researcher)
 blockers: none
 open questions for user: (numbered, each answerable in one line)
+waivers:
+- rule 7: <why this claim ships without its results file>
 history:
+- <ISO> S07 done, tests green (24 passed), results/S07.csv
 - <ISO> S06 done, tests green (24 passed), results/S06.csv
 ```
 
@@ -594,14 +602,14 @@ Commands, by phase:
 | `rh add note\|literature\|gaps\|log <heading> -m "..."` | 3+ | appends under a heading, creating it if missing; literature takes a DOI |
 | `rh search <query>` | any | rg-based search over `.rh/` and the artifacts, no index |
 | `rh add task TITLE --id --deliverable --verify --subtask` | 4-6 | creates one board task with its subtasks |
-| `rh tasks set <id> idle\|working\|complete` | 5-6 | board state; subtask ids work too. `rh tasks` shows the board |
-| `rh phase` / `rh phase N` | any | shows the phase and its gate, or advances it gated; `--force` waives, so record it (rule 11) |
+| `rh tasks set <id> idle\|working\|complete\|cancelled` | 5-6 | board state; subtask ids work too. `rh tasks` shows the board (cancelled work is counted in one footer line; `rh tasks -c` shows it) |
+| `rh tasks phase` / `rh tasks phase N` | any | shows the phase and its gate, or advances it gated; `--force` waives, so record it (rule 11) |
 | `rh resume` / `rh -r` | any | execs the Orchestrator here, per `agents.commands.orchestrator`; `--dry-run` prints the command |
 | `rh spawn <role> [prompt]` | any | opens a role agent per §5; `--dry-run`, `--inline`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | any | opens a plain shell, not an agent |
-| `rh agents [ROLE] [--write]` | any | list or show the role files |
+| `rh agent list` / `info <role>` / `write [role]` | any | list roles, render one role file, create missing starter files |
 | `rh doctor` | any | verify what the config names |
-| `rh agent status`, `rh gate check`, `rh log tail` | any | running agents, gate report, logs |
+| `rh agent status`, `rh log tail` | any | running agents, logs. Gate problems are printed by `rh tasks` and `rh status` |
 | `rh handoff` / `rh handoff --clear` | any | show the next-session handoff the Orchestrator wrote, or empty it after reading (rule 14) |
 | `rh info [FILE.md]` | any | what an artifact is for: owner, phase, sections, template, rules |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd`; `--tools`, `--example` |
@@ -614,7 +622,7 @@ Contracts that keep the two layers consistent:
    installed it lists options and the user picks; nothing is downloaded or installed automatically,
    not even through `npx`. `rh` never creates or overwrites `.rh/workflow.mmd` (transient sources go
    to `.rh/tmp/`); with no file it reports the workflow as pending.
-2. **`rh phase` enforces the hard gates of §3, but the artifacts are the gate.** Passing the CLI
+2. **`rh tasks phase` enforces the hard gates of §3, but the artifacts are the gate.** Passing the CLI
    check is not an exit gate by itself: user confirmation, planner agreement and critique sign-off
    still happen per §3.
 3. **Tasks are created explicitly; nothing parses the plan.** `PLAN.md` stays prose. Whoever owns

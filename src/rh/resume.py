@@ -57,7 +57,7 @@ def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str
                  include_role_file: bool = False) -> str:
     """The FIRST message the harness receives: load the skill, then follow it.
 
-    Deliberately short. Project state lives in `.rh/CHECKLIST.md` / `rh phase` /
+    Deliberately short. Project state lives in `.rh/CHECKLIST.md` / `rh tasks phase` /
     `.rh/STATUS.md`, so the orchestrator reads it live instead of trusting a
     snapshot printed here. `include_role_file` is the fallback for a launch
     template that does not wire `.rh/agents/orchestrator.md` into the harness
@@ -80,7 +80,7 @@ def build_prompt(root: Path, env: dict, gate: dict, store: TaskStore, extra: str
         f"Project root: {root}",
         "",
         "Your checklist is `.rh/CHECKLIST.md` — read it first and work it top to bottom.",
-        "Then `rh phase` and `.rh/STATUS.md`. Ask the user before every state-changing",
+        "Then `rh tasks phase` and `.rh/STATUS.md`. Ask the user before every state-changing",
         "action (SKILL.md §0.3).",
     ]
     handoff = paths.rh_dir(root) / "HANDOFF.md"

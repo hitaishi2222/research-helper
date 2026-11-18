@@ -101,7 +101,7 @@ def check(root: Path, env: dict | None = None) -> dict:
     for role in sorted(command_roles | configured_roles):
         role_ok = agents_mod.read_role(root, role) is not None
         add(f"role-file.{role}", role_ok,
-            f".rh/agents/{role}.md" + ("" if role_ok else " missing — `rh agents <role> --write`, then fill it in with the user"))
+            f".rh/agents/{role}.md" + ("" if role_ok else " missing — `rh agent write <role>`, then fill it in with the user"))
     if not configured:
         add("commands", False,
             "no agents.commands.<role> template set — rh resume/spawn have nothing to run; "
@@ -115,13 +115,16 @@ def check(root: Path, env: dict | None = None) -> dict:
             add("spawn-template", True, "agents.spawn is shell-splittable")
         except ValueError as exc:
             add("spawn-template", False, f"agents.spawn: {exc}")
+    elif str((env.get("agents") or {}).get("backend") or "none") in config.load_backends():
+        add("spawn-template", True, "agents.spawn blank — the backend template applies")
     else:
         add("spawn-template", True, "agents.spawn blank — detached process + .rh/logs/ log")
 
-    # backend binary (tmux / herdr) when named
-    backend = (env.get("agents") or {}).get("backend") or "none"
-    if backend in ("tmux", "herdr"):
-        ok, where = _bin_ok(backend)
+    # backend binary (tmux / herdr / tuios) when named
+    backend = str((env.get("agents") or {}).get("backend") or "none").strip().lower()
+    spec = config.load_backends().get(backend) or {}
+    if spec:
+        ok, where = _bin_ok(str(spec.get("bin") or backend))
         add("backend", ok, f"{backend} → {where}")
     else:
         add("backend", True, f"agents.backend={backend}")

@@ -12,11 +12,12 @@ points the agent at it as its first read.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from . import agents as agents_mod
 from . import config, paths
-from .tasks import PHASE_EXIT, TaskStore, phase_exit, phase_name
+from .tasks import TaskStore, phase_exit, phase_name
 
 # Roles that get their own agent, per agents.count (SKILL.md §5).
 LAUNCH_ROLES = {
@@ -74,6 +75,33 @@ def _due(ok: bool, needed_at: int, current: int) -> str:
     if ok:
         return "ok"
     return "later" if needed_at > current else "pending"
+
+
+# STATUS.md keeps the last ten one-line history entries; older lines live in
+# the step's event log under .rh/logs/ (SKILL.md §5, §7).
+HISTORY_CAP = 10
+_HISTORY_START = re.compile(r"(?mi)^\s*(?:#{1,6}\s+history\b|history\s*:)")
+_HISTORY_ENTRY = re.compile(r"^\s{0,3}[-*]\s+\S")
+
+
+def _history_entries(status_text: str) -> int:
+    """Entry lines under the STATUS.md history section; unparsable text counts as 0.
+
+    Accepts `## History` and `history:` alike. Counting stops at the first line
+    that is neither a bullet nor blank, so a later list in the file is never
+    counted as history; anything unexpected counts low, never high.
+    """
+    lines = status_text.splitlines()
+    start = next((i + 1 for i, line in enumerate(lines) if _HISTORY_START.match(line)), None)
+    if start is None:
+        return 0
+    count = 0
+    for line in lines[start:]:
+        if _HISTORY_ENTRY.match(line):
+            count += 1
+        elif line.strip():
+            break
+    return count
 
 
 def _setup_items(root: Path, env: dict, current: int) -> list[dict]:
@@ -159,14 +187,19 @@ def _setup_items(root: Path, env: dict, current: int) -> list[dict]:
     # 6. pane layout / spawn command for the chosen backend
     backend = str(agents.get("backend") or "none")
     spawn_tmpl = str(agents.get("spawn") or "").strip()
-    needs_spawn = backend != "none" and not spawn_tmpl
+    # A blank agents.spawn is covered by the backend's shipped pane template
+    # (harnesses.json); the user only steps in for a backend with no entry.
+    needs_spawn = backend != "none" and not spawn_tmpl and backend not in config.load_backends()
     items.append({
         "id": "setup-spawn",
-        "label": "Set `agents.spawn` when agents.open in panes (blank backend = detached process)",
+        "label": "Set `agents.spawn` when agents open in panes (blank backend = detached process)",
         "status": "pending" if needs_spawn else "ok",
         "ref": "§2",
-        "detail": (f"agents.backend={backend} but agents.spawn is blank — ask the user for the pane command (e.g. tmux new-window -n rh-{{project}}-{{agent}} -c {{root}} {{command}})")
-        if needs_spawn else f"backend={backend}",
+        "detail": (f"agents.backend={backend} has no shipped pane template — write the pane command (e.g. tmux new-window -n rh-{{project}}-{{role}} -c {{root}} {{command}})")
+        if needs_spawn else (
+            f"backend={backend} · agents.spawn blank: the {backend} template applies"
+            if backend != "none" and not spawn_tmpl else f"backend={backend}"
+        ),
     })
 
     # 7. workflow diagram — authored after the plan exists
@@ -248,10 +281,10 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     # Not observable from disk: no file says "rule 7 was waived". Human check.
     items.append({
         "id": "rule-11",
-        "label": "Any waived rule recorded in STATUS.md history by rule number",
+        "label": "Any waived rule recorded in STATUS.md `waivers:` by rule number",
         "status": "current",
         "ref": RULE_REFS["waiver"],
-        "detail": "not checkable from disk — when waiving, record the rule number in STATUS.md history + manuscript limitations",
+        "detail": "not checkable from disk — when waiving, record the rule number under `waivers:` in STATUS.md (not in history) + manuscript limitations",
     })
 
     # Rule 12 — verify path before opening any agent.
@@ -316,7 +349,11 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     def _read(name: str) -> str:
         if paths.rh_dir(root).exists():
             try:
-                return paths.artifact_path(root, name).read_text(encoding="utf-8")
+                # errors="replace": an odd byte must not take the whole checklist
+                # down; a garbled file is still something the agent can inspect.
+                return paths.artifact_path(root, name).read_text(
+                    encoding="utf-8", errors="replace"
+                )
             except OSError:
                 return ""
         return ""
@@ -351,6 +388,19 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
         "ref": "§5 STATUS.md",
         "detail": (f"header missing: {', '.join(header_missing)} — write `phase: <n NAME> | step: <id> | updated: <ISO>` "
                    "(markdown emphasis is fine)") if header_missing else "",
+    })
+
+    # STATUS.md is current state, not a diary: only the last HISTORY_CAP
+    # entries stay; older ones belong in that step's log under .rh/logs/.
+    history = _history_entries(status_text)
+    items.append({
+        "id": "content-status-history",
+        "label": "STATUS.md history is capped at 10 entries (older lines belong in .rh/logs/)",
+        "status": _due(history <= HISTORY_CAP, 5, current),
+        "ref": "§5 STATUS.md",
+        "detail": (f"history holds {history} entries (cap {HISTORY_CAP}) — move the older lines "
+                   "into that step's event log under `.rh/logs/` and keep the last 10")
+        if history > HISTORY_CAP else "",
     })
 
     plan_steps = _re.findall(r"(?m)^###\s+(S\w+)", plan_text)

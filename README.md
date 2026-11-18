@@ -64,8 +64,8 @@ rh env set agents.count=2 agents.backend=tmux agents.cli=pi \
   agents.skills=research-helper,crw literature.search=crw \
   literature.library=papr project.git=true
 rh env show                 # config as a table, validated
-rh phase 4                  # gated: refuses to skip unmet exits
-rh phase                    # what the current phase still needs
+rh tasks phase 4            # gated: refuses to skip unmet exits
+rh tasks phase              # what the current phase still needs
 rh describe                 # the map an agent reads
 rh resume --dry-run         # the exact command the orchestrator would start
 rh spawn researcher "implement S07 of PLAN.md"
@@ -95,20 +95,22 @@ A tool on `PATH` does not mean this project should use it.
 | `rh add task "title" [--id S01] [--phase N] [--owner ROLE] [--state idle\|working\|complete\|cancelled] [--verify CMD] [--deliverable FILE] [--depends-on S01,S02] [--kind build\|spike]` | add a board task |
 | `rh search <query> [--max N]` | rg-first local search over `.rh/` + artifacts |
 | `rh tasks set <id> <idle\|working\|complete\|cancelled>` | change a task or subtask state (`cancelled` = plan killed by a later finding) |
-| `rh tasks [--phase N] [--state S]` | every task + subtask, state, progress bars |
+| `rh tasks [--phase N] [--state S] [--cancelled]` | the board: every task + subtask, state, progress bars; cancelled tasks are counted in one footer line — `-c`/`--cancelled` shows them |
+| `rh tasks phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh status` | header, phase rail, per-phase progress |
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
-| `rh phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh resume` / `rh -r` | run the orchestrator **in this terminal** — command from `agents.commands.orchestrator` (wiring `.rh/agents/orchestrator.md` in as the system prompt), only `agents.skills` loaded; opens with the skill read and does not echo the prompt |
 | `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
 | `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |
-| `rh agents [ROLE] [--write]` | list or show the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `--write` creates a missing one (starters ship populated) |
+| `rh agent list` / `rh agent info <role>` / `rh agent write [role]` | the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `info` renders the file, `write` creates missing starter roles without overwriting an edited one |
+| `rh agent status` | who is running, on which model, from `.rh/logs/spawns.jsonl` |
 | `rh handoff` / `rh handoff --clear` | show the handoff the Orchestrator wrote for the next session (`.rh/HANDOFF.md`), or empty it after reading; empty at `rh init`, never generated from `STATUS.md`/`PLAN.md` |
 | `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
 | `rh describe [--json]` | the AI map: layout, phases, env keys, artifacts, spawn, budget |
 
-Global flags (before the subcommand): `--root DIR`, `--json`, `--version`.
+Global flags (before or after the subcommand): `--root DIR`, `--json`; `--version` prints the release.
+`rh -t` is `rh tasks`; `rh -r` is `rh resume`.
 A wrong command or flag prints the full `--help`, nothing else (exit 2).
 Every command supports `--json` for agent reads — never parse the pretty UI.
 
@@ -131,10 +133,27 @@ rh spawn researcher "read S07 and implement it"
 Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {name} {project} {provider}
 {model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template that
 omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your env.json
-is not being honoured instead of guessing a flag. With no `agents.spawn` the agent
-is started as a detached process and its output goes to `.rh/logs/`.
+is not being honoured instead of guessing a flag.
 `{project}` is the project-name slug: name every pane `rh-<project>-<role>`, so two
 projects running at the same time never collide.
+
+**Pane backends are data, not flags you have to know.** `agents.backend` picks
+one, and `rh spawn` resolves the pane command in this order:
+
+1. `agents.spawn` — your own template, always wins;
+2. the backend's shipped template, when `agents.spawn` is blank:
+
+| backend | template |
+|---|---|
+| `tmux` | `tmux new-window -n rh-{project}-{role} -c {root} {command}` (needs a running tmux server, i.e. call it from inside tmux) |
+| `tuios` | `tuios new-window -s "$TUIOS_SESSION" rh-{project}-{role} --cwd {root} --no-focus --keep-open -- {command}` (inside a tuios pane; elsewhere replace `$TUIOS_SESSION` with `tuios ls`'s name) |
+| `herdr` | `herdr pane split --json` then `herdr pane run <new pane> {command}` — herdr has no create-pane-with-command call, so the shipped line decodes the split's pane id with `python3`; edit it if your herdr differs |
+
+3. otherwise a detached process whose output goes to `.rh/logs/`.
+
+The templates live in `harnesses.json` inside the package, so correcting one is a
+config/package edit, not a code change. `rh doctor` reports a missing backend
+binary and whether the pane command will come from your template or the backend.
 Ready-made scripts and per-role prompt templates live in [`examples/`](examples/README.md).
 
 
@@ -149,7 +168,7 @@ Ready-made scripts and per-role prompt templates live in [`examples/`](examples/
                             └── replan ──┘
 ```
 
-Each phase has an **exit gate**; `rh phase` refuses to advance past an unmet one.
+Each phase has an **exit gate**; `rh tasks phase` refuses to advance past an unmet one.
 State lives in plain files, not a database:
 
 ```

@@ -175,7 +175,9 @@ ARTIFACTS: dict[str, dict] = {
     },
     "STATUS.md": {
         "purpose": "The truth about where the project is: current phase and step, the agent "
-                   "roster, blockers, open questions for the user, and a timestamped history.",
+                   "roster, blockers, open questions for the user, waivers, and the last ten "
+                   "step transitions. Current state, not a diary: the older history lives in "
+                   "the event log under `.rh/logs/`.",
         "location": "STATUS.md",
         "owner": "Orchestrator only (never delegated — rule 9)",
         "phase": "5 STATE and later",
@@ -183,15 +185,24 @@ ARTIFACTS: dict[str, dict] = {
             "header line — `phase: <n NAME> | step: <id> | updated: <ISO>`",
             "agents — role → model → backend window",
             "blockers · open questions for user (numbered, answerable in one line)",
-            "history — one line per step transition, timestamped",
+            "waivers: one line per waived SKILL.md rule number (rule 11), kept out of history "
+            "so trimming never loses one",
+            "history: the last 10 one-line step transitions, newest first",
         ],
         "template": "# Status — <project name>\nphase: 6 IMPLEMENT | step: S07 | updated: <ISO>\n"
                     "agents: orchestrator=<model>  researcher=<model>  (backend: tmux window 2)\n"
                     "blockers: none\nopen questions for user: (numbered, answerable in one line)\n"
-                    "history:\n- <ISO> S06 done, tests green (24 passed), results/S06.csv",
+                    "waivers:\n- rule 7: <why this claim ships without its results file>\n"
+                    "history:\n- <ISO> S07 done, tests green (24 passed), results/S07.csv\n"
+                    "- <ISO> S06 done, tests green (24 passed), results/S06.csv",
         "rules": [
             "Update after every step and before every question to the user (rule 9).",
-            "A waiver of a SKILL.md rule is recorded here by number (rule 11).",
+            "Current state, not a diary: keep this file small and trim history into `.rh/logs/`.",
+            "History is the last 10 one-line entries, newest first. When it grows past ten, the "
+            "dropped lines go into the event log the Orchestrator already writes for that step "
+            "under `.rh/logs/` (SKILL.md §7); `.rh/CHECKLIST.md` flags a longer history.",
+            "A waiver of a SKILL.md rule is recorded by number under `waivers:` (rule 11), so "
+            "trimming history never loses one.",
             "Spawn and close of every agent is recorded here (rules 12–13).",
         ],
         "consumers": "the resume handoff, the phase gate (`rh status`), the user",

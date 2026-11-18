@@ -24,8 +24,8 @@ How a role file reaches the agent:
 3. If a template omits `{agent_file}`, `launch_plan()` warns that the role
    file is not wired into the system prompt.
 
-`rh init` writes the starter roles below; `rh agents <role> --write` creates one
-later, and `rh agents --write` fills in any that are missing. The Orchestrator
+`rh init` writes the starter roles below; `rh agent write <role>` creates one
+later, and `rh agent write` fills in any that are missing. The Orchestrator
 then edits the file with user approval. Starter roles:
 
     orchestrator, literature, researcher, reviewer, critique, writer
@@ -80,7 +80,7 @@ ORCHESTRATOR_CONTENT = """# ORCHESTRATOR agent
 
 Role: the head of this project — routing, gates, every question to the user, and the singular owner of STATUS.md.
 Owns: routing, `.rh/STATUS.md`, merged `.rh/PLAN.md`, the roster, all user questions.
-May: delegate (`rh spawn <role>`), enforce gates (`rh phase`), escalate, edit artifacts.
+May: delegate (`rh spawn <role>`), enforce gates (`rh tasks phase`), escalate, edit artifacts.
 May not: implement or fix code, approve its own plan, pick models (they live in `.rh/env.json`).
 
 Rules carried into every session:
@@ -95,8 +95,10 @@ Rules carried into every session:
   by that name when you send it work;
 - when a session ends, write `.rh/HANDOFF.md` yourself: what the next session must
   do first. Never generate it from STATUS.md/PLAN.md, and empty it after reading;
-- ask before every state-changing action; a waiver is recorded in STATUS.md by rule number;
-- update STATUS.md yourself after every step, before every question (rule 9);
+- ask before every state-changing action; a waiver is recorded under `waivers:` in
+  STATUS.md by rule number;
+- update STATUS.md yourself after every step, before every question (rule 9); it is
+  current state, not a diary: keep the last ten history lines, older ones go to `.rh/logs/`;
 - verify the project path before opening an agent (rule 12) and close it after (rule 13);
 - report back with files changed, evidence (command + number), and needs.
 

@@ -349,9 +349,17 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
             "mode": "none",
             "command": "",
             "log": "",
+            "source": "",
             "notes": list(plan.get("notes") or []),
         }
-    template = str((env.get("agents") or {}).get("spawn") or "").strip()
+    agents = env.get("agents") or {}
+    template = str(agents.get("spawn") or "").strip()
+    source = "agents.spawn"
+    if not template:
+        # No hand-written pane template: the configured backend's data owns it.
+        backend = str(agents.get("backend") or "").strip().lower()
+        template = str((config.load_backends().get(backend) or {}).get("spawn") or "").strip()
+        source = f"backends.{backend}" if template else ""
     if template:
         notes: list[str] = []
         values = {
@@ -371,6 +379,7 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
             "mode": "pane",
             "command": substitute(template, values, notes),
             "log": "",
+            "source": source,
             "notes": _uniq(notes),
         }
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -379,6 +388,7 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
         "mode": "background",
         "command": shlex.join(plan["argv"]),
         "log": str(log),
+        "source": "",
         "notes": [],
     }
 
@@ -420,7 +430,7 @@ def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
             preview["command"], shell=True, cwd=str(root), check=False
         )
         preview["returncode"] = proc.returncode
-        _spawn_record(root, role, plan, None, "pane")
+        _spawn_record(root, role, plan, None, "pane", preview.get("source", ""))
         return preview
     if preview["mode"] != "background":
         return preview
@@ -441,7 +451,12 @@ def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
 
 
 def _spawn_record(
-    root: Path, role: str, plan: dict, pid: int | None, mode: str
+    root: Path,
+    role: str,
+    plan: dict,
+    pid: int | None,
+    mode: str,
+    pane_source: str = "",
 ) -> None:
     """Append one JSON line per spawn to .rh/logs/spawns.jsonl (agent status + budget)."""
     log_dir = paths.logs_dir(root)
@@ -451,7 +466,7 @@ def _spawn_record(
         "pid": pid,
         "mode": mode,
         "model": plan.get("model", ""),
-        "source": plan.get("source", ""),
+        "source": pane_source or plan.get("source", ""),
         "log": "",
         "ts": datetime.now().isoformat(),
     }
@@ -531,7 +546,7 @@ def build_role_prompt(
 
     Role definition comes from `.rh/agents/<role>.md` (the Orchestrator's
     tailored agent file). If the file is missing the prompt names that and
-    points at `rh agents <role> --write`; rh never invents role rules.
+    points at `rh agent write <role>`; rh never invents role rules.
     """
     role = (role or "").strip().lower()
     try:
@@ -573,7 +588,7 @@ def build_role_prompt(
     else:
         lines += [
             f"No role file yet at {agent_path} — the Orchestrator creates it with",
-            f"  rh agents {role} --write",
+            f"  rh agent write {role}",
             "and edits it with user approval. Ask the Orchestrator for your scope",
             "until then; do not guess at your role.",
             "",

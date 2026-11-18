@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from rh import agents, checklist, cli, config, paths, spawn, tasks, workflow
+from rh import agents, artifacts, checklist, cli, config, paths, spawn, tasks, workflow
 
 
 def run(argv):
@@ -80,6 +80,34 @@ def test_role_files_are_populated_not_blank(tmp_path, capsys):
             assert fact not in text, (role, fact)
 
 
+def test_status_contract_carries_the_history_cap():
+    """The artifact contract is what `rh info STATUS.md` and the agent read."""
+    spec = artifacts.ARTIFACTS["STATUS.md"]
+    text = " ".join([spec["purpose"], *spec["sections"], *spec["rules"], spec["template"]])
+    assert "waivers:" in text
+    assert "last 10" in text or "last ten" in text
+    assert ".rh/logs/" in text
+
+
+def test_orchestrator_role_carries_the_new_status_shape(tmp_path, capsys):
+    run(["--root", str(tmp_path), "init", "--non-interactive"])
+    text = agents.read_role(tmp_path, "orchestrator")
+    assert "`waivers:`" in text
+    assert "last ten" in text and ".rh/logs/" in text
+    assert "waiver is recorded in STATUS.md by rule number" not in text
+
+
+def test_checklist_survives_a_non_utf8_status(tmp_path):
+    """One odd byte must not take the checklist down (the file is still readable)."""
+    run(["--root", str(tmp_path), "init", "--non-interactive"])
+    (tmp_path / ".rh" / "tasks.json").write_text(
+        json.dumps({"version": 1, "project_name": "", "current_phase": 6, "tasks": []}))
+    paths.artifact_path(tmp_path, "STATUS.md").write_bytes(
+        b"phase: 6 IMPLEMENT | step: S02\nhistory:\n- S02 done \xff\xfe\n")
+    by_id = {i["id"]: i for i in checklist.build_checklist(tmp_path)["items"]}
+    assert by_id["content-status-history"]["status"] == "ok"
+
+
 def test_init_refreshes_only_untouched_stub_roles(tmp_path, capsys):
     root = str(tmp_path)
     run(["--root", root, "init"])
@@ -123,6 +151,120 @@ def test_cancelled_is_a_state_that_resolves_progress(tmp_path, capsys):
     assert data["summary"]["idle"] == 0
     assert data["summary"]["complete"] == 1
     assert data["summary"]["pct"] == 100
+
+
+def test_cancelled_hidden_from_the_board_with_a_footer(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    for tid in ("S01", "S02", "S03"):
+        run(["--root", root, "add", "task", f"step {tid}", "--id", tid])
+    run(["--root", root, "tasks", "set", "S01", "working"])
+    run(["--root", root, "tasks", "set", "S02", "cancelled"])
+    run(["--root", root, "tasks", "set", "S03", "cancelled"])
+    capsys.readouterr()
+    assert run(["--root", root, "tasks"]) == 0
+    out = capsys.readouterr().out
+    assert "S02" not in out and "S03" not in out  # cancelled rows are not listed
+    assert "2 tasks cancelled — check with `rh tasks -c`" in out
+    assert "2 tasks cancelled" not in out.replace(
+        "2 tasks cancelled — check with `rh tasks -c`", ""
+    )
+
+
+def test_cancelled_footer_survives_an_empty_board(tmp_path, capsys):
+    """Cancelled tasks are the only tasks: the pointer to `-c` must still print."""
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    for tid in ("A1", "A2"):
+        run(["--root", root, "add", "task", tid, "--id", tid])
+    run(["--root", root, "tasks", "set", "A1", "cancelled"])
+    run(["--root", root, "tasks", "set", "A2", "cancelled"])
+    capsys.readouterr()
+    assert run(["--root", root, "tasks"]) == 0
+    out = capsys.readouterr().out
+    assert "2 tasks cancelled — check with `rh tasks -c`" in out
+    assert "No tasks yet" not in out
+    # a filtered-out view is not an empty board either
+    assert run(["--root", root, "tasks", "--state", "working"]) == 0
+    assert "2 tasks cancelled" in capsys.readouterr().out
+
+
+def test_global_options_at_group_level(tmp_path, capsys):
+    """`rh <group> --root X <sub>` parses like `rh --root X <group> <sub>`."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    capsys.readouterr()
+    assert run(["env", "--root", root, "show", "--json"]) == 0
+    assert run(["agent", "--root", root, "status", "--json"]) == 0
+    assert run(["log", "--root", root, "tail", "--json"]) == 0
+    assert run(["skill", "--root", root, "install", "--dest", str(tmp_path / "s")]) == 0
+
+
+def test_tasks_subcommands_honour_group_level_root(tmp_path, capsys, monkeypatch):
+    """`rh tasks --root OTHER phase` must act on OTHER, never on the cwd project.
+
+    This is the mutating group, so a swallowed --root writes to the wrong project.
+    """
+    here, other = tmp_path / "here", tmp_path / "other"
+    for d in (here, other):
+        d.mkdir()
+        run(["--root", str(d), "init", "--non-interactive"])
+    run(["--root", str(other), "tasks", "phase", "4"])  # OTHER is at phase 4
+    run(["--root", str(other), "add", "task", "only in other", "--id", "B1"])
+    monkeypatch.chdir(here)  # cwd project is at phase 0 and has no B1
+    capsys.readouterr()
+    # read
+    assert run(["tasks", "--root", str(other), "phase", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["phase"] == 4
+    # write through the subcommand
+    assert run(["tasks", "--root", str(other), "set", "B1", "working"]) == 0
+    assert tasks.TaskStore(other).get("B1")["state"] == "working"
+    # and the phase setter must not touch the cwd project
+    assert run(["tasks", "--root", str(other), "phase", "3"]) == 0
+    assert tasks.TaskStore(other).current_phase() == 3
+    assert tasks.TaskStore(here).current_phase() == 0
+
+
+def test_json_is_one_document_per_command(tmp_path, capsys):
+    """Every --json invocation prints exactly one JSON document."""
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    capsys.readouterr()
+    for argv in (
+        ["add", "task", "T one", "--id", "T1"],
+        ["env", "list"],
+        ["env", "set", "agents.count=2"],
+    ):
+        assert run(["--root", root, *argv, "--json"]) == 0
+        out = capsys.readouterr().out
+        assert out.strip().startswith(("{", "[")) and out.strip().endswith(("}", "]"))
+        json.loads(out)  # one parseable document, no concatenation
+
+
+def test_cancelled_view_and_json(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    for tid in ("S01", "S02"):
+        run(["--root", root, "add", "task", f"step {tid}", "--id", tid])
+    run(["--root", root, "tasks", "set", "S02", "cancelled"])
+    capsys.readouterr()
+    assert run(["--root", root, "tasks", "--cancelled"]) == 0
+    out = capsys.readouterr().out
+    assert "S02" in out and "S01" not in out
+    assert run(["--root", root, "tasks", "-c", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert [t["id"] for t in data["tasks"]] == ["S02"]
+    assert data["summary"]["total"] == 2  # the summary still describes the board
+
+
+def test_no_cancelled_footer_when_none_cancelled(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    run(["--root", root, "add", "task", "only step", "--id", "S01"])
+    capsys.readouterr()
+    assert run(["--root", root, "tasks"]) == 0
+    assert "cancelled" not in capsys.readouterr().out
 
 
 def test_papers_stay_at_root(tmp_path):
@@ -178,7 +320,7 @@ def test_resume_uses_env_command_model_thinking_and_skills(tmp_path, capsys):
                 ("agents.commands.orchestrator=pi --model {model} --thinking {thinking} "
                  "--skill {skills} --system-prompt-file {agent_file} --prompt-file {prompt_file}")]) == 0
     # also write the role file so {agent_file} resolves to a real path
-    run(["--root", root, "agents", "orchestrator", "--write"])
+    run(["--root", root, "agent", "write", "orchestrator"])
     capsys.readouterr()
     assert run(["--root", root, "resume", "--dry-run", "--json"]) == 0
     data = payload(capsys.readouterr().out, "{")
@@ -350,10 +492,10 @@ def test_agents_write_list_and_spawn_uses_role_file(tmp_path, capsys):
     run(["--root", root, "init"])
     run(["--root", root, "env", "set", "agents.commands.researcher=pi --model {model} {prompt}"])
     capsys.readouterr()
-    assert run(["--root", root, "agents", "--write"]) == 0
+    assert run(["--root", root, "agent", "write"]) == 0
     capsys.readouterr()
     assert (tmp_path / ".rh" / "agents" / "researcher.md").exists()
-    assert run(["--root", root, "agents", "researcher"]) == 0
+    assert run(["--root", root, "agent", "info", "researcher"]) == 0
     assert "RESEARCHER agent" in capsys.readouterr().out
     capsys.readouterr()
     assert run(["--root", root, "spawn", "researcher", "do S01", "--dry-run", "--json"]) == 0
@@ -361,6 +503,51 @@ def test_agents_write_list_and_spawn_uses_role_file(tmp_path, capsys):
     assert "Role file (.rh/agents/<role>.md)" in data["prompt"]
     assert "Owns:" in data["prompt"] and "# RESEARCHER agent" in data["prompt"]
     assert "agents.commands.researcher" in data["prompt"]
+
+
+def test_agent_list_includes_configured_roles(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set",
+         "agents.commands.coder=pi --model {model} {prompt}"])
+    capsys.readouterr()
+    assert run(["--root", root, "agent", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "coder" in out and "rh agent write coder" in out
+    assert run(["--root", root, "agent", "list", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "[")
+    assert any(r["role"] == "coder" and r["exists"] is False for r in data)
+
+
+def test_agent_info_renders_markdown_and_json_keeps_raw(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    capsys.readouterr()
+    assert run(["--root", root, "agent", "info", "researcher"]) == 0
+    out = capsys.readouterr().out
+    assert "RESEARCHER agent" in out
+    assert "# RESEARCHER agent" not in out  # heading marker is styled, not printed
+    assert run(["--root", root, "agent", "info", "researcher", "--json"]) == 0
+    content = payload(capsys.readouterr().out, "{")["content"]
+    assert content.startswith("# RESEARCHER agent")
+
+
+def test_agent_write_preserves_an_edited_file(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    edited = tmp_path / ".rh" / "agents" / "reviewer.md"
+    edited.write_text("# REVIEWER agent\n\nRole: ours.\n")
+    capsys.readouterr()
+    assert run(["--root", root, "agent", "write", "reviewer"]) == 0
+    assert edited.read_text() == "# REVIEWER agent\n\nRole: ours.\n"
+
+
+def test_plural_agents_command_is_removed(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    capsys.readouterr()
+    assert run(["--root", root, "agents", "researcher"]) == 2
+    assert run(["--root", root, "agent"]) == 2
 
 
 def test_checklist_reports_live_items(tmp_path, capsys):
@@ -382,7 +569,7 @@ def test_doctor_reports_shell_and_templates(tmp_path, capsys):
     run(["--root", root, "init"])
     run(["--root", root, "env", "set", "agents.shell=sh", "agents.split=vertical",
          "agents.commands.researcher=sh --model {model} --system-prompt-file {agent_file} --prompt-file {prompt_file}"])
-    run(["--root", root, "agents", "researcher", "--write"])
+    run(["--root", root, "agent", "write", "researcher"])
     capsys.readouterr()
     assert run(["--root", root, "doctor", "--json"]) == 0
     data = payload(capsys.readouterr().out, "{")
@@ -424,7 +611,7 @@ def test_skills_list_expansion(tmp_path):
 def test_agent_file_contents_placeholder(tmp_path, capsys):
     root = str(tmp_path)
     run(["--root", root, "init"])
-    run(["--root", root, "agents", "researcher", "--write"])
+    run(["--root", root, "agent", "write", "researcher"])
     run(["--root", root, "env", "set",
          "agents.commands.researcher=pi --system {agent_file_contents} --prompt-file {prompt_file}"])
     capsys.readouterr()
@@ -442,19 +629,58 @@ def test_checklist_v2_content_items(tmp_path, capsys):
     assert {"content-status-header", "content-plan-verify", "content-lit-doi", "content-one-layout"} <= ids
 
 
-def test_gate_check_and_log_tail_and_handoff(tmp_path, capsys):
+def test_gate_problems_are_visible_in_tasks(tmp_path, capsys):
+    """`rh gate check` is gone: the same content rides on the task board."""
     root = str(tmp_path)
     run(["--root", root, "init"])
     capsys.readouterr()
-    assert run(["--root", root, "gate", "check", "--json"]) == 0
+    assert run(["--root", root, "tasks", "--json"]) == 0
     data = payload(capsys.readouterr().out, "{")
-    assert "phase" in data and "ok" in data
+    assert "phase" in data["gate"] and "ok" in data["gate"]
+    assert run(["--root", root, "gate", "check"]) == 2
+
+
+def test_log_tail_and_handoff(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init"])
+    capsys.readouterr()
     assert run(["--root", root, "log", "tail", "--json"]) == 0
     assert run(["--root", root, "handoff", "--json"]) == 0
     data = payload(capsys.readouterr().out, "{")
+    assert data["pending"] is False and data["text"] == ""
     assert (tmp_path / ".rh" / "HANDOFF.md").exists()
 
 
+def test_tasks_phase_show_set_and_gates(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    store = tasks.TaskStore(tmp_path)
+    capsys.readouterr()
+    # show: the current phase, its exit gate and whether the gate is met
+    assert run(["--root", root, "tasks", "phase", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["phase"] == 0 and data["phase_name"].startswith("0 CONFIG")
+    assert "env.json" in data["exit_gate"]
+    # forward past unmet hard gates: refused, store untouched
+    assert run(["--root", root, "tasks", "phase", "6"]) == 1
+    assert store.current_phase() == 0
+    # a phase with no hard prerequisite advances, with the waiver warning
+    assert run(["--root", root, "tasks", "phase", "4"]) == 0
+    assert "waiver" in capsys.readouterr().err
+    assert store.current_phase() == 4
+    # forced advance records the force in JSON
+    assert run(["--root", root, "tasks", "phase", "6", "--force", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["forced"] is True and data["phase"] == 6
+    assert store.current_phase() == 6
+
+
+def test_top_level_phase_command_is_removed(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    capsys.readouterr()
+    assert run(["--root", root, "phase", "5"]) == 2
+    assert tasks.TaskStore(tmp_path).current_phase() == 0
 def test_handoff_is_authored_not_generated(tmp_path, capsys):
     """init leaves it empty; `rh handoff` shows it and never packs STATUS/PLAN."""
     root = str(tmp_path)
@@ -499,11 +725,120 @@ def test_spawn_pane_name_is_project_scoped(tmp_path, capsys):
     assert "rh-optics-lab-researcher" in data["prompt"]
 
 
+def test_spawn_resolves_the_backend_template(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "project.name=Fiber Noise",
+         "agents.backend=tmux",
+         "agents.commands.researcher=pi --model {model} {prompt}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "go", "--dry-run", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["mode"] == "pane"
+    assert data["command"].startswith("tmux new-window -n rh-fiber-noise-researcher ")
+    assert data["spawn_source"] == "backends.tmux"
+
+
+def test_agents_spawn_wins_over_the_backend_template(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.backend=tmux",
+         "agents.commands.researcher=pi --model {model} {prompt}",
+         "agents.spawn=my-pane {command}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "go", "--dry-run", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["command"].startswith("my-pane ")
+    assert data["spawn_source"] == "agents.spawn"
+
+
+def test_spawn_without_a_backend_is_a_background_process(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.backend=none",
+         "agents.commands.researcher=pi --model {model} {prompt}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "go", "--dry-run", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["mode"] == "background"
+    assert data["log"].endswith(".log") and "/.rh/logs/" in data["log"]
+    assert not (tmp_path / ".rh" / "logs" / "spawns.jsonl").exists()  # dry run records nothing
+
+
+def test_unknown_pane_placeholder_is_reported(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set",
+         "agents.commands.researcher=pi --model {model} {prompt}",
+         "agents.spawn=tmux new-window {nope} {command}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "go", "--dry-run", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert any("{nope}" in n for n in data["notes"])
+
+
 def test_checklist_asks_for_the_purpose(tmp_path):
     run(["--root", str(tmp_path), "init", "--non-interactive"])
     data = checklist.build_checklist(tmp_path)
     item = next(i for i in data["items"] if i["id"] == "content-problem-purpose")
     assert item["status"] in ("pending", "later")
+
+
+def test_agent_status_marks_live_and_pane_rows(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    f = tmp_path / ".rh" / "logs" / "spawns.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    import os
+    f.write_text(
+        json.dumps({"role": "researcher", "pid": os.getpid(), "mode": "background",
+                    "model": "m", "source": "x", "ts": "t"}) + "\n"
+        + json.dumps({"role": "writer", "pid": None, "mode": "pane",
+                      "model": "m", "source": "backends.tmux", "ts": "t"}) + "\n"
+    )
+    capsys.readouterr()
+    assert run(["--root", root, "agent", "status"]) == 0
+    out = capsys.readouterr().out
+    assert f"pid={os.getpid()} (alive)" in out
+    assert "pane (backend-owned)" in out and "pid=None" not in out
+
+
+def test_agent_info_missing_role_exits_zero(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    (tmp_path / ".rh" / "agents" / "reviewer.md").unlink()
+    capsys.readouterr()
+    assert run(["--root", root, "agent", "info", "reviewer"]) == 0
+    assert "rh agent write reviewer" in capsys.readouterr().out
+
+
+def test_failed_pane_command_is_reported_and_recorded(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set",
+         "agents.commands.researcher=pi --model {model} {prompt}",
+         "agents.spawn=false {command}"])
+    capsys.readouterr()
+    assert run(["--root", root, "spawn", "researcher", "go"]) == 0
+    out = capsys.readouterr().out
+    assert "pane command failed" in out
+    recs = [
+        json.loads(line)
+        for line in (tmp_path / ".rh" / "logs" / "spawns.jsonl").read_text().splitlines()
+    ]
+    assert recs[-1]["mode"] == "pane" and recs[-1]["source"] == "agents.spawn"
+
+
+def test_pane_spawns_do_not_count_against_the_budget(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.count=1",
+         "agents.commands.researcher=pi --model {model} {prompt}",
+         "agents.spawn=false {command}"])
+    run(["--root", root, "spawn", "researcher", "go"])
+    capsys.readouterr()
+    assert spawn.running_count(tmp_path) == 0
+    assert run(["--root", root, "spawn", "researcher", "go again"]) == 0
 
 
 def test_agent_status_empty(tmp_path, capsys):
@@ -531,6 +866,37 @@ def test_budget_enforcement(tmp_path, capsys):
     assert run(["--root", root, "spawn", "researcher", "do S01", "--dry-run", "--force"]) == 0
 
 
+def test_init_fills_the_spawn_template_from_the_backend(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.backend=tuios"])
+    capsys.readouterr()
+    assert run(["--root", root, "init", "--non-interactive", "--force"]) == 0
+    env = config.load_env(tmp_path)
+    assert env["agents"]["spawn"] == config.load_backends()["tuios"]["spawn"]
+    # a hand-written template survives a re-init
+    run(["--root", root, "env", "set", "agents.spawn=my-pane {command}"])
+    capsys.readouterr()
+    assert run(["--root", root, "init", "--non-interactive", "--force"]) == 0
+    assert config.load_env(tmp_path)["agents"]["spawn"] == "my-pane {command}"
+
+
+def test_doctor_reports_a_missing_backend_binary(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    run(["--root", root, "env", "set", "agents.backend=tmux",
+         "agents.commands.researcher=pi --model {model} --append-system-prompt {agent_file} {prompt}"])
+    capsys.readouterr()
+    assert run(["--root", root, "doctor", "--json"]) == 0
+    checks = {c["id"]: c for c in payload(capsys.readouterr().out, "{")["checks"]}
+    assert checks["backend"]["ok"] is True  # tmux is installed on this machine
+    run(["--root", root, "env", "set", "agents.backend=herdr"])
+    capsys.readouterr()
+    assert run(["--root", root, "doctor", "--json"]) == 1
+    checks = {c["id"]: c for c in payload(capsys.readouterr().out, "{")["checks"]}
+    assert checks["backend"]["ok"] is False and "herdr" in checks["backend"]["detail"]
+
+
 def test_background_spawn_is_recorded_and_budgeted(tmp_path, capsys):
     """A real spawn must land in spawns.jsonl, or `rh agent status` and the
     agents.count budget are dead weight."""
@@ -539,8 +905,8 @@ def test_background_spawn_is_recorded_and_budgeted(tmp_path, capsys):
     import signal
     root = str(tmp_path)
     run(["--root", root, "init", "--non-interactive"])
-    run(["--root", root, "agents", "researcher", "--write"])
-    run(["--root", root, "env", "set", "agents.count=1", "agents.commands.researcher=/bin/sleep 30"])
+    run(["--root", root, "agent", "write", "researcher"])
+    run(["--root", root, "env", "set", "agents.count=1", "agents.commands.researcher=/bin/sh -c 'sleep 30'"])
     capsys.readouterr()
     assert run(["--root", root, "spawn", "researcher", "do S01"]) == 0
     recs = [_json.loads(l) for l in (tmp_path / ".rh" / "logs" / "spawns.jsonl").read_text().splitlines()]
@@ -745,7 +1111,7 @@ def test_doctor_flags_missing_role_file_for_configured_role(tmp_path, capsys):
     assert run(["--root", root, "doctor", "--json"]) == 1
     ids = {c["id"]: c for c in payload(capsys.readouterr().out, "{")["checks"]}
     assert ids["role-file.coder"]["ok"] is False
-    run(["--root", root, "agents", "coder", "--write"])
+    run(["--root", root, "agent", "write", "coder"])
     capsys.readouterr()
     assert run(["--root", root, "doctor", "--json"]) == 0
 
@@ -783,10 +1149,52 @@ def test_checklist_reports_the_missing_header_part(tmp_path, capsys):
     assert item["status"] in ("pending", "later") and "updated" in item["detail"]
 
 
+def test_checklist_flags_a_history_over_ten_entries(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    (tmp_path / ".rh" / "tasks.json").write_text(
+        json.dumps({"version": 1, "project_name": "", "current_phase": 6, "tasks": []}))
+    entries = "".join(f"- 2026-11-06T06:{i:02d} S{i:02d} done\n" for i in range(14))
+    paths.artifact_path(tmp_path, "STATUS.md").write_text(
+        "phase: 6 IMPLEMENT | step: S14 | updated: 2026-11-06T07:00\n"
+        "blockers: none\nhistory:\n" + entries)
+    capsys.readouterr()
+    item = {i["id"]: i for i in checklist.build_checklist(tmp_path)["items"]}["content-status-history"]
+    assert item["status"] == "pending"
+    assert "14" in item["detail"] and "cap 10" in item["detail"] and ".rh/logs/" in item["detail"]
+
+
+def test_checklist_accepts_a_history_under_the_cap(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    (tmp_path / ".rh" / "tasks.json").write_text(
+        json.dumps({"version": 1, "project_name": "", "current_phase": 6, "tasks": []}))
+    paths.artifact_path(tmp_path, "STATUS.md").write_text(
+        "phase: 6 IMPLEMENT | step: S03 | updated: 2026-11-06T07:00\n"
+        "## History\n- 2026-11-06T06:30 S03 done\n- 2026-11-06T06:10 S02 done\n"
+        "- 2026-11-06T05:50 S01 done\n")
+    capsys.readouterr()
+    by_id = {i["id"]: i for i in checklist.build_checklist(tmp_path)["items"]}
+    assert by_id["content-status-history"]["status"] == "ok"
+    assert by_id["content-status-history"]["detail"] == ""
+
+
+def test_checklist_history_item_survives_a_status_without_history(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    (tmp_path / ".rh" / "tasks.json").write_text(
+        json.dumps({"version": 1, "project_name": "", "current_phase": 6, "tasks": []}))
+    paths.artifact_path(tmp_path, "STATUS.md").write_text(
+        "phase: 6 IMPLEMENT | step: S03 | updated: 2026-11-06T07:00\nblockers: none\n")
+    capsys.readouterr()
+    by_id = {i["id"]: i for i in checklist.build_checklist(tmp_path)["items"]}
+    assert by_id["content-status-history"]["status"] == "ok"
+
+
 def test_dry_run_writes_no_prompt_files(tmp_path, capsys):
     root = str(tmp_path)
     run(["--root", root, "init", "--non-interactive"])
-    run(["--root", root, "agents", "researcher", "--write"])
+    run(["--root", root, "agent", "write", "researcher"])
     run(["--root", root, "env", "set",
          "agents.commands.researcher=pi --system-prompt-file {agent_file} --prompt-file {prompt_file}",
          "agents.commands.orchestrator=pi --system-prompt-file {agent_file} --prompt-file {prompt_file}"])
@@ -927,12 +1335,53 @@ def test_init_questionnaire_other_accepts_a_custom_binary(tmp_path, capsys, monk
     assert config.load_env(tmp_path)["agents"]["cli"] == "mycli"
 
 
+def test_short_alias_tasks(tmp_path, capsys):
+    """`rh -t` is `rh tasks`, flags included."""
+    root = str(tmp_path)
+    assert run(["--root", root, "init", "--non-interactive"]) == 0
+    capsys.readouterr()
+    assert run(["--root", root, "-t", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert json.loads(out[out.index("{"):])["summary"]["total"] == 0
+
+
+def test_short_alias_resume_matches_resume(tmp_path, capsys):
+    root = str(tmp_path)
+    assert run(["--root", root, "resume", "--dry-run"]) == 1  # no .rh/ yet
+    plain = capsys.readouterr()
+    assert run(["--root", root, "-r", "--dry-run"]) == 1
+    aliased = capsys.readouterr()
+    assert plain.err == aliased.err and plain.out == aliased.out
+
+
+def test_global_options_work_on_both_sides(tmp_path, capsys):
+    """--root/--json before or after the subcommand give the same single document."""
+    root = str(tmp_path)
+    assert run(["--root", root, "init", "--non-interactive"]) == 0
+    capsys.readouterr()
+    assert run(["--root", root, "tasks", "--json"]) == 0
+    before = capsys.readouterr().out
+    assert run(["tasks", "--root", root, "--json"]) == 0
+    after = capsys.readouterr().out
+    assert before == after
+    assert before.strip().startswith("{") and before.strip().endswith("}")
+
+
+def test_json_before_the_subcommand(tmp_path, capsys):
+    root = str(tmp_path)
+    assert run(["--root", root, "init", "--non-interactive"]) == 0
+    capsys.readouterr()
+    assert run(["--root", root, "--json", "status"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["initialized"] is True
+
+
 def test_bad_usage_falls_back_to_full_help(capsys):
     """A wrong command/flag shows the same text as `--help`, not just a usage line."""
     assert run(["nope"]) == 2
     out = capsys.readouterr()
     assert out.err == ""  # no "error: invalid choice" line
-    assert "usage: rh" in out.out and "init" in out.out and "handoff" in out.out
+    assert "usage: rh" in out.out.lower() and "init" in out.out and "handoff" in out.out
 
 
 def test_help_and_version_exit_zero(capsys):
@@ -944,4 +1393,4 @@ def test_help_and_version_exit_zero(capsys):
 
 def test_no_command_shows_help(capsys):
     assert run([]) == 2
-    assert "usage: rh" in capsys.readouterr().out
+    assert "usage: rh" in capsys.readouterr().out.lower()

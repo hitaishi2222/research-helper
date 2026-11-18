@@ -4,6 +4,56 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.2.0] — 2026-11-18
+
+A smaller command surface: one command per concept, panes that know their backend,
+and a parser (typer) that makes the next change cheap. Several commands are gone —
+see **Removed**.
+
+### Added
+
+- **`rh tasks phase [0-9]`** — the phase and its exit gate, and the gated setter,
+  now live where the work is. `--force` still records a waiver.
+- **`rh tasks -c` / `--cancelled`** — cancelled tasks are hidden from the board by
+  default and counted in one footer line (`N tasks cancelled — check with rh tasks -c`).
+- **`rh -t`** — short alias for `rh tasks` (next to the existing `rh -r`).
+- **`rh agent list|info <role>|write [role]`** — one group for role files, with
+  `rh agent info` rendering the Markdown instead of dumping raw text, and
+  `rh agent status` unchanged.
+- **Bounded `STATUS.md`.** History is the last ten one-line step transitions; older
+  lines move into that step's event log under `.rh/logs/`, and rule waivers get their
+  own `waivers:` list so trimming history never loses one. `.rh/CHECKLIST.md` flags a
+  longer history (`content-status-history`), and `rh info STATUS.md` states the cap.
+- **Shipped pane templates per backend** — `agents.spawn` (yours, always wins) →
+  backend template (tmux, tuios, herdr, from `harnesses.json`) → detached process
+  with a log. `rh init` fills a blank `agents.spawn` from the chosen backend;
+  `rh doctor` reports a missing backend binary.
+
+### Changed
+
+- **BREAKING** The CLI parser is `typer` instead of `argparse`. Surviving commands,
+  flags and exit codes are unchanged except as listed below, and usage errors still
+  print the full help (with each command's one-line description) and exit 2.
+- `--json` now means exactly one JSON document, per the CLI contract: `rh add task`
+  and `rh env list` print one document instead of prose/concatenated objects, and
+  `rh env set --json` sends its config warnings to stderr. `rh tasks --json`'s
+  `tasks` array follows the view (cancelled hidden unless `-c`); `summary` is
+  unchanged.
+- `--root`/`--json` are accepted inside a command group too (`rh env --root X show`).
+- **BREAKING** `-r`/`-t` expand only when the command line names no explicit
+  subcommand, so `rh -r status` (previously `rh resume` plus a flag it ignored) is
+  now a usage error.
+- **BREAKING** `requires-python` is now `>=3.11` (was `>=3.9`); CI tests 3.11,
+  3.12 and 3.13.
+
+### Removed
+
+- **BREAKING** `rh phase` → `rh tasks phase` (same gates, same `--force`).
+- **BREAKING** `rh gate check` → gate problems are printed by `rh tasks` and
+  `rh status`, and `rh tasks --json` carries the same `gate` object.
+- **BREAKING** `rh agents [ROLE] [--write]` → `rh agent list` / `rh agent info <role>`
+  / `rh agent write [role]`.
+
 ## [0.1.7] — 2026-11-12
 
 Project-scoped agent names, a purpose question at intake, and a handoff that is

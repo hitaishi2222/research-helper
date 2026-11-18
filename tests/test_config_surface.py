@@ -5,7 +5,7 @@ prose, tasks are created explicitly with `rh add task`), so nothing here parses 
 """
 import json
 
-from rh import cli, tasks
+from rh import cli, config, tasks
 
 
 def run(argv):
@@ -113,3 +113,23 @@ def test_add_task_with_subtasks_then_set_them(tmp_path, capsys):
     assert run(["--root", str(tmp_path), "tasks", "set", "S01.2", "complete"]) == 0
     assert tasks.TaskStore(tmp_path).get("S01.2")["state"] == "complete"
     assert tasks.TaskStore(tmp_path).get("S01.1")["state"] == "idle"
+
+
+def test_backend_templates_are_data():
+    """Each pane backend ships a bin and a spawn template with {command}."""
+    backends = config.load_backends()
+    assert set(backends) == {"tmux", "tuios", "herdr"}
+    for name, spec in backends.items():
+        assert spec["bin"] and "{command}" in spec["spawn"], name
+    # harness names never leak the backends section
+    assert "backends" not in config.harness_names()
+
+
+def test_apply_backend_fills_only_a_blank_spawn():
+    blank = {"agents": {"spawn": ""}}
+    assert config.apply_backend(blank, "tuios") is True
+    assert blank["agents"]["spawn"] == config.load_backends()["tuios"]["spawn"]
+    mine = {"agents": {"spawn": "my-pane {command}"}}
+    assert config.apply_backend(mine, "tmux") is True
+    assert mine["agents"]["spawn"] == "my-pane {command}"
+    assert config.apply_backend({"agents": {}}, "nope") is False

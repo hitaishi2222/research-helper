@@ -183,7 +183,7 @@ class TaskStore:
         }
 
 
-# Exit gate text per phase (SKILL.md §3) — shown by `rh phase`, never enforced alone.
+# Exit gate text per phase (SKILL.md §3) — shown by `rh tasks phase`, never enforced alone.
 PHASE_EXIT = {
     0: ".rh/env.json parses and the user confirmed it",
     1: "PROBLEM.md has all seven sections (purpose first), user approved",

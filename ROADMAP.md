@@ -38,8 +38,8 @@ discussion first.
 3. **Placeholders are the only extension point.** New ways of passing a value to
    a harness (a list repeated as a flag, file contents inline, …) are new
    placeholders with a clear name, not special cases per harness.
-4. **Checks are against disk, never self-reported.** `rh doctor` and
-   `rh gate check` read files and binaries and report what is actually there.
+4. **Checks are against disk, never self-reported.** `rh doctor` reads files and binaries and reports what is actually there;
+   `rh tasks` / `rh status` print the phase-gate problems the same way.
    An agent saying "done" is not evidence.
 5. **The Orchestrator does less, not more.** Every new command must remove a
    manual step the Orchestrator had to do by eye, or it does not ship.
@@ -55,7 +55,7 @@ discussion first.
 - [x] heading-structured artifacts: `add note|literature|layout|gaps|problem|plan|status|manuscript`
 - [x] task board: `add task` (with `--subtask`), `tasks`, `tasks set`
 - [x] ~~`plan import`~~ removed: the plan is prose, the board is created explicitly
-- [x] phase pipeline with gated `rh phase` (no-arg shows the exit gate) and waivers
+- [x] phase pipeline with gated `rh tasks phase` (no-arg shows the exit gate) and waivers
 - [x] `rh status` — phase rail, progress bars, per-phase tasks
 - [x] `rh search` — rg-first, Python fallback, no indexing
 - [x] `rh workflow` — viewer for the agent-authored mermaid DAG (`bm`-first renderer priority + built-in text fallback)
@@ -88,8 +88,28 @@ role agent with the command written there.
       `agents.commands.orchestrator`, loading only `agents.skills`
 - [x] `examples/` — starter spawn scripts + per-role prompt templates
 - [x] `rh spawn terminal <cmd>` — shell terminal in a new pane (`agents.shell`, `agents.split`)
-- [x] `.rh/agents/<role>.md` per-role files + `rh agents [ROLE] [--write]` (no role
+- [x] `.rh/agents/<role>.md` per-role files + `rh agent list|info|write` (no role
   info hardcoded; `{agent_file}` wires the role file into the CLI system-prompt flag)
+
+### Sidequest tracking (next version)
+
+A tangent is real work, so it goes on the board instead of living in the chat:
+whoever notices it records it, timeboxes it, and brings it back to the user.
+
+- [ ] `rh add task --kind sidequest "..."` — a sidequest carries the step it branched
+  from, why it came up, a timebox, and its own state; it shows on `rh tasks` under
+  that step, so "what are we actually doing" stays honest while the plan waits
+- [ ] closing one records an outcome — `kept` (fed back into the step), `dropped`
+  (with the one-line reason) or `promoted` (becomes a `PLAN.md` step via
+  `rh add task`), plus where its result landed (`results/`, `LITERATURE.md`) —
+  so a sidequest never silently becomes the main line or disappears
+- [ ] `rh status` counts open sidequests next to the working tasks and flags one that
+  blew its timebox; `rh tasks -k sidequest` (or `--kind`) filters them
+- [ ] `SKILL.md` rule: do not chase a tangent mid-step — record it, timebox it, ask
+  the user, then promote or drop it (rule 11 waivers stay separate)
+
+No new command namespace: sidequests ride the board, the task states and the phase
+gates, so `rh tasks` remains the one place work is visible.
 
 ## v0.4 — Make the Orchestrator do less
 
@@ -120,7 +140,7 @@ Every item here removes a manual Orchestrator step. Ordered roughly by value.
   exactly one layout.
 - [x] `rh agent status` — who is running, on which model, in which pane
   (reads `.rh/logs/` spawn records).
-- [x] `rh gate check` — machine-readable gate report for agents (`--json`).
+- [x] ~~`rh gate check`~~ folded into `rh tasks` / `rh status` (warnings + the `gate` object in `--json`) in 0.2.
 - [x] `rh log tail` — read the §7 event log without opening files.
 - [x] Concurrent budget enforcement from `agents.count` — track spawns in
   `.rh/logs/`; refuse the (count+1)th concurrent agent without `--force`.
@@ -130,19 +150,19 @@ Every item here removes a manual Orchestrator step. Ordered roughly by value.
 A role in `rh` is a file (`.rh/agents/<role>.md`) plus a launch command
 (`agents.commands.<role>`) and optionally a model (`agents.roles.<role>`).
 Today all three must be set one at a time, and only the starter roles are
-scaffolded by `rh agents --write`.
+scaffolded by `rh agent write`.
 
-- [ ] `rh agents new <role>` — create a custom role in one step: ask for the
+- [ ] `rh agent new <role>` — create a custom role in one step: ask for the
   one-line purpose, scaffold `.rh/agents/<role>.md` with it, then record
   `agents.commands.<role>` (copy `agents.commands.default`, or ask for the
   flags with the user) and `agents.roles.<role>.model` in `.rh/env.json`. Refuse
   to overwrite an existing role file without `--force` (archive first).
-- [ ] `rh agents edit <role>` — open the role file, and show which ENV keys
+- [ ] `rh agent edit <role>` — open the role file, and show which ENV keys
   belong to that role (command, model, thinking) so they are edited together.
-- [ ] `rh agents rm <role>` — archive the role file to `.rh/.bak/` and remove
+- [ ] `rh agent rm <role>` — archive the role file to `.rh/.bak/` and remove
   `agents.commands.<role>` / `agents.roles.<role>`, refusing while that role
   still owns open tasks.
-- [ ] `rh agents --write` scaffolds every role that has a command or a model in
+- [ ] `rh agent write` scaffolds every role that has a command or a model in
   env.json, not only the starter six (custom roles included).
 - [ ] `rh doctor` checks custom roles the same way as starter roles: file
   present, command splittable, `{agent_file}` + `{prompt}` wired, model set —

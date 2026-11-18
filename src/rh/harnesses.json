@@ -19,5 +19,19 @@
       "orchestrator": "codex --model {model} --system-prompt-file {agent_file} --prompt-file {prompt_file}",
       "default": "codex --model {model} --system-prompt-file {agent_file} --prompt-file {prompt_file}"
     }
+  },
+  "backends": {
+    "tmux": {
+      "bin": "tmux",
+      "spawn": "tmux new-window -n rh-{project}-{role} -c {root} {command}"
+    },
+    "tuios": {
+      "bin": "tuios",
+      "spawn": "tuios new-window -s \"$TUIOS_SESSION\" rh-{project}-{role} --cwd {root} --no-focus --keep-open -- {command}"
+    },
+    "herdr": {
+      "bin": "herdr",
+      "spawn": "herdr pane run \"$(herdr pane split --cwd {root} --no-focus --direction right --json | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"result\"][\"pane\"][\"pane_id\"])')\" {command}"
+    }
   }
 }

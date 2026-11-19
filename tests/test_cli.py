@@ -1,4 +1,6 @@
 import json
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -894,17 +896,22 @@ def test_init_fills_the_spawn_template_from_the_backend(tmp_path, capsys):
 def test_doctor_reports_a_missing_backend_binary(tmp_path, capsys):
     root = str(tmp_path)
     run(["--root", root, "init", "--non-interactive"])
+    # `sh` exists everywhere; the harness binary itself is not what this tests
     run(["--root", root, "env", "set", "agents.backend=tmux",
-         "agents.commands.researcher=pi --model {model} --append-system-prompt {agent_file} {prompt}"])
+         "agents.commands.researcher=sh {agent_file} {prompt}"])
     capsys.readouterr()
-    assert run(["--root", root, "doctor", "--json"]) == 0
+    tmux = bool(shutil.which("tmux"))
+    assert run(["--root", root, "doctor", "--json"]) == (0 if tmux else 1)
     checks = {c["id"]: c for c in payload(capsys.readouterr().out, "{")["checks"]}
-    assert checks["backend"]["ok"] is True  # tmux is installed on this machine
+    assert checks["backend"]["ok"] is tmux  # reports disk truth, not a guess
     run(["--root", root, "env", "set", "agents.backend=herdr"])
+    herdr = bool(shutil.which("herdr"))
     capsys.readouterr()
-    assert run(["--root", root, "doctor", "--json"]) == 1
+    assert run(["--root", root, "doctor", "--json"]) == (0 if herdr else 1)
     checks = {c["id"]: c for c in payload(capsys.readouterr().out, "{")["checks"]}
-    assert checks["backend"]["ok"] is False and "herdr" in checks["backend"]["detail"]
+    assert checks["backend"]["ok"] is herdr
+    if not herdr:
+        assert "herdr" in checks["backend"]["detail"]
 
 
 def test_background_spawn_is_recorded_and_budgeted(tmp_path, capsys):
@@ -1386,12 +1393,21 @@ def test_json_before_the_subcommand(tmp_path, capsys):
     assert data["initialized"] is True
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(text):
+    """Help output carries ANSI when a terminal is detected (CI does); assert text."""
+    return ANSI.sub("", text)
+
+
 def test_bad_usage_falls_back_to_full_help(capsys):
     """A wrong command/flag shows the same text as `--help`, not just a usage line."""
     assert run(["nope"]) == 2
     out = capsys.readouterr()
+    text = plain(out.out)
     assert out.err == ""  # no "error: invalid choice" line
-    assert "usage: rh" in out.out.lower() and "init" in out.out and "handoff" in out.out
+    assert "usage: rh" in text.lower() and "init" in text and "handoff" in text
 
 
 def test_help_and_version_exit_zero(capsys):
@@ -1403,7 +1419,7 @@ def test_help_and_version_exit_zero(capsys):
 
 def test_no_command_shows_help(capsys):
     assert run([]) == 2
-    assert "usage: rh" in capsys.readouterr().out.lower()
+    assert "usage: rh" in plain(capsys.readouterr().out).lower()
 
 
 # --- board edits --------------------------------------------------------------

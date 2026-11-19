@@ -9,9 +9,9 @@ TAILOR block in each file tells the Orchestrator to narrow it with the user.
 
 How a role file reaches the agent:
 
-1. `rh spawn <role>` writes `.rh/tmp/spawn-<role>-prompt.md` (the session
-   prompt) and points `agents.commands.<role>` at it via `{prompt}` /
-   `{prompt_file}`.
+1. `rh spawn <role>` writes the session prompt to `.rh/briefs/<agent-name>.md`
+   and opens the pane with one line naming it; `{prompt_file}` points at the
+   same brief for a harness that takes a file.
 2. The same file system puts `.rh/agents/<role>.md` on disk; the command
    template wires it into the CLI's system-prompt area with `{agent_file}`,
    e.g.::
@@ -100,6 +100,10 @@ Rules carried into every session:
   by that name when you send it work;
 - when a session ends, write `.rh/HANDOFF.md` yourself: what the next session must
   do first. Never generate it from STATUS.md/PLAN.md, and empty it after reading;
+- a spawned agent sends no message: its report lands in `.rh/reports/<agent-name>.md`
+  and its last act is `rh agent done <agent-name>`; read `rh agent status` / the
+  report file, never the pane, and close an agent that did not report with
+  `rh agent done <agent-name> --outcome closed` (rule 13);
 - ask before every state-changing action; a waiver is recorded under `waivers:` in
   STATUS.md by rule number;
 - update STATUS.md yourself after every step, before every question (rule 9); it is
@@ -122,6 +126,13 @@ Rules carried into every session:
 - write only inside the files this role owns — everything else is read-only;
 - report back with files changed, evidence (command + number), and needs;
 - never update STATUS.md unless you are the Orchestrator.
+
+How you finish (the completion contract — the Orchestrator reads a file, never a pane):
+- write your report to `.rh/reports/<your backend name>.md`: what you changed, the
+  evidence (command + number), and what you need from the Orchestrator;
+- your last act is `rh agent done <your backend name>`. It refuses an empty report,
+  so write the file first. `--outcome blocked` asks for the Orchestrator;
+  `--outcome closed` is only for the Orchestrator closing your pane.
 
 The launch command for this role lives in `.rh/env.json` as
 agents.commands.{role}; `rh spawn {role}` uses exactly that command and wires

@@ -4,6 +4,62 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.2.2] — 2026-11-19
+
+An agent can finish without the Orchestrator reading a screen, and session state
+can be reconciled by a command instead of by eye. From `ISSUES.md`.
+
+### Added
+
+- **`rh agent done <name> [--report PATH] [--outcome ok|blocked|failed|closed]`** —
+  records completion in `.rh/agents/<name>.json`. Refuses a missing or empty
+  report; `--outcome closed` is the rule-13 close and needs none. The agent's last
+  act is this command, so the Orchestrator reads a file instead of a spinner.
+- **`rh agent status`** reports `open | done | blocked | failed | closed` with the
+  outcome, report path and age, reading `.rh/agents/<name>.json`. Pre-change
+  `spawns.jsonl` rows still appear as history.
+- **`rh agent wait [--name] [--timeout SECONDS]`** blocks until the named agent, or
+  every open agent, reports; non-zero on timeout, naming who is still open.
+- **`rh preflight`** reconciles the board phase, `STATUS.md`'s `phase:`/`step:`
+  header and the artifacts, checks `working` tasks against open agents (both ways)
+  and `complete` tasks against their declared deliverable. It prints the
+  precedence (artifacts > `STATUS.md` > board and logs) and which source to fix
+  first; it never writes.
+- **`rh verify [--strict]`** pairs every manuscript claim with its
+  `evidence: <path>[, <path>]` line: the file must exist and every number in the
+  claim (years and bracketed citations excepted) must appear in it. `--strict` also
+  fails claims with no evidence line and is named in the phase-8 gate.
+- **`project.inputs`** records the values a result multiplies —
+  `{name, value, note, state, who, when}` with `state` `confirmed` (who + when
+  required) or `assumed`. `rh env show` marks assumed entries, `rh status` /
+  `rh tasks phase` warn while one is unwaived, and rule 16 forbids an assumed input
+  behind a claim.
+- **`.rh/briefs/<agent-name>.md`** holds what an agent was told;
+  **`.rh/reports/<agent-name>.md`** is where it reports.
+
+### Changed
+
+- **`rh spawn` launches with one line** (``Read .rh/briefs/<agent-name>.md and
+  execute it.``) instead of pasting the whole prompt into the pane. `{prompt}` is
+  that line and `{prompt_file}` is the brief; the `.rh/tmp/spawn-<role>-prompt.md`
+  file is gone.
+- **Agent names are unique by construction**: `rh-<project>-<role>`, then `-2`,
+  `-3` … against existing state files; `--name` only forces a suffix. A new
+  `{agent_name}` placeholder names the pane; the shipped tmux/tuios templates use
+  it. `{project}`/`{role}` are unchanged.
+- **`agents.count` now counts pane spawns**, because open state files are the
+  count. Close an agent that did not report with `rh agent done <name> --outcome
+  closed`.
+- **Role files carry the completion clause** (report path + `rh agent done`), and
+  the Orchestrator role says to read `rh agent status` and the report file. Blank
+  scaffolds pick it up from `rh init --force`; tailored files are left alone, and
+  `rh doctor` warns (without failing) when a role file lacks it.
+- **SKILL.md rule 9 states the precedence** — artifacts > `STATUS.md` > board and
+  logs — and makes a stale status file a defect fixed at session start. Phase 5
+  starts with `rh preflight`, before the first question to the user. Rule 16 and
+  phase 2 cover confirmed vs assumed inputs. Phase 8 names `rh verify --strict`.
+  Rules 13 and 15 cover reporting and mechanically unique names.
+
 ## [0.2.1] — 2026-11-19
 
 Board edits, single-task inspection, and an upgrade path that keeps the checklist.

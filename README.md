@@ -100,13 +100,17 @@ A tool on `PATH` does not mean this project should use it.
 | `rh tasks reorder <id> (--before \| --after) <id>` | move a task inside its phase; list order is display order. Hand-editing `.rh/tasks.json` for removal/reordering is allowed after user approval (valid JSON, ids and `current_phase` untouched) |
 | `rh tasks [--phase N] [--state S] [--cancelled]` | the board: every task + subtask, state, progress bars; cancelled tasks are counted in one footer line — `-c`/`--cancelled` shows them |
 | `rh tasks phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
-| `rh status` | header, phase rail, per-phase progress |
+| `rh status` | header, phase rail, per-phase progress; warns while a `project.inputs` entry is assumed and unwaived |
+| `rh preflight` | reconcile the board phase, `STATUS.md`'s header and the artifacts: names the source that lies and the one to fix first. Run it at session start, before any question (artifacts > `STATUS.md` > board and logs) |
+| `rh verify [--strict]` | pair every manuscript claim with the `evidence:` file it cites and check its numbers against that file (rule 7); `--strict` also fails claims with no evidence line — the phase-8 gate |
 | `rh workflow` | display the agent-authored `.rh/workflow.mmd` as ASCII (`--tools`, `--example`, `--png`, `--svg`) |
 | `rh resume` / `rh -r` | run the orchestrator **in this terminal** — command from `agents.commands.orchestrator` (wiring `.rh/agents/orchestrator.md` in as the system prompt), only `agents.skills` loaded; opens with the skill read and does not echo the prompt |
-| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; `--inline`, `--dry-run`, `--prompt-file`, `--split` |
+| `rh spawn <role> [prompt]` | open another role agent (`literature`, `researcher`, `reviewer`, `critique`, `writer` or your own) with the command written in `.rh/env.json`; writes `.rh/briefs/<agent-name>.md`, launches with one line naming it, and records `state: open`; `--inline`, `--dry-run`, `--prompt-file`, `--split`, `--name` (uniqueness is automatic: `-2`, `-3` …) |
 | `rh spawn terminal <cmd>` | open a plain shell terminal in a new pane (shell from `agents.shell`/`$SHELL`, layout from `agents.split`); `--dry-run`, `--split` |
 | `rh agent list` / `rh agent info <role>` / `rh agent write [role]` | the per-role files in `.rh/agents/` (the only role description — no role info is hardcoded in `rh`); `info` renders the file, `write` creates missing starter roles without overwriting an edited one |
-| `rh agent status` | who is running, on which model, from `.rh/logs/spawns.jsonl` |
+| `rh agent status` | per agent: `open \| done \| blocked \| failed \| closed`, its outcome, report path and age — read from `.rh/agents/<name>.json`, never from a pane |
+| `rh agent done <name> [--report PATH] [--outcome ok\|blocked\|failed\|closed]` | record completion; refuses an empty or missing report, `closed` is the rule-13 close. This is the notification the Orchestrator reads |
+| `rh agent wait [--name] [--timeout SECONDS]` | block until that agent, or every open agent, reports; exits non-zero on timeout, naming who is still open |
 | `rh handoff` / `rh handoff --clear` | show the handoff the Orchestrator wrote for the next session (`.rh/HANDOFF.md`), or empty it after reading; empty at `rh init`, never generated from `STATUS.md`/`PLAN.md` |
 | `rh info [FILE]` | what that artifact is for: owner, phase, sections, template, rules (`--json`, `--template`) |
 | `rh skill install [--dest DIR] [--force]` | install the bundled skill globally |
@@ -128,17 +132,24 @@ Every command supports `--json` for agent reads — never parse the pretty UI.
 rh env set \
   'agents.roles.orchestrator={"provider":"pi","model":"glm-5","thinking":"high"}' \
   'agents.commands.orchestrator=pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}' \
-  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n {agent_name} -c {root} {command}'
 rh resume            # → pi --model glm-5 --thinking high --append-system-prompt .rh/agents/orchestrator.md "Load the `research-helper` skill now…"
 rh spawn researcher "read S07 and implement it"
 ```
 
-Placeholders: `{role} {agent} {prompt} {prompt_file} {root} {name} {project} {provider}
-{model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template that
-omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your env.json
+Placeholders: `{role} {agent} {agent_name} {prompt} {prompt_file} {root} {name} {project}
+{provider} {model} {thinking} {skills}`, plus `{command}` in `agents.spawn`. A template
+that omits `{model}`/`{thinking}`/`{skills}` still runs — `rh` warns that your env.json
 is not being honoured instead of guessing a flag.
-`{project}` is the project-name slug: name every pane `rh-<project>-<role>`, so two
-projects running at the same time never collide.
+
+`{agent_name}` is the unique agent name: `rh-<project>-<role>`, with `-2`, `-3` … when
+an open agent already holds it, so two agents of one role never share a pane, a brief
+or a report. `rh spawn` writes the whole prompt to `.rh/briefs/<agent_name>.md` and
+launches with one line (``Read .rh/briefs/<agent_name>.md and execute it.``); the agent
+writes `.rh/reports/<agent_name>.md` and finishes with `rh agent done <agent_name>`, so
+you learn the outcome from a file (`rh agent status`, `rh agent wait`) instead of a
+spinner. `{project}` and `{role}` are still there if you want to build names yourself
+— but a hand-built name collides on the second agent, and `rh` warns about it.
 
 **Pane backends are data, not flags you have to know.** `agents.backend` picks
 one, and `rh spawn` resolves the pane command in this order:
@@ -148,8 +159,8 @@ one, and `rh spawn` resolves the pane command in this order:
 
 | backend | template |
 |---|---|
-| `tmux` | `tmux new-window -n rh-{project}-{role} -c {root} {command}` (needs a running tmux server, i.e. call it from inside tmux) |
-| `tuios` | `tuios new-window -s "$TUIOS_SESSION" rh-{project}-{role} --cwd {root} --no-focus --keep-open -- {command}` (inside a tuios pane; elsewhere replace `$TUIOS_SESSION` with `tuios ls`'s name) |
+| `tmux` | `tmux new-window -n {agent_name} -c {root} {command}` (needs a running tmux server, i.e. call it from inside tmux) |
+| `tuios` | `tuios new-window -s "$TUIOS_SESSION" {agent_name} --cwd {root} --no-focus --keep-open -- {command}` (inside a tuios pane; elsewhere replace `$TUIOS_SESSION` with `tuios ls`'s name) |
 | `herdr` | `herdr pane split --json` then `herdr pane run <new pane> {command}` — herdr has no create-pane-with-command call, so the shipped line decodes the split's pane id with `python3`; edit it if your herdr differs |
 
 3. otherwise a detached process whose output goes to `.rh/logs/`.

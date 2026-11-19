@@ -23,11 +23,11 @@
   "backends": {
     "tmux": {
       "bin": "tmux",
-      "spawn": "tmux new-window -n rh-{project}-{role} -c {root} {command}"
+      "spawn": "tmux new-window -n {agent_name} -c {root} {command}"
     },
     "tuios": {
       "bin": "tuios",
-      "spawn": "tuios new-window -s \"$TUIOS_SESSION\" rh-{project}-{role} --cwd {root} --no-focus --keep-open -- {command}"
+      "spawn": "tuios new-window -s \"$TUIOS_SESSION\" {agent_name} --cwd {root} --no-focus --keep-open -- {command}"
     },
     "herdr": {
       "bin": "herdr",

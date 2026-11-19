@@ -178,10 +178,12 @@ ARTIFACTS: dict[str, dict] = {
         "consumers": "tasks.json (created with `rh add task`), STATUS.md, MANUSCRIPT.md",
     },
     "STATUS.md": {
-        "purpose": "The truth about where the project is: current phase and step, the agent "
-                   "roster, blockers, open questions for the user, waivers, and the last ten "
-                   "step transitions. Current state, not a diary: the older history lives in "
-                   "the event log under `.rh/logs/`.",
+        "purpose": "Where the project is: current phase and step, the agent roster, blockers, "
+                   "open questions for the user, waivers, and the last ten step transitions. "
+                   "Current state, not a diary: the older history lives in the event log under "
+                   "`.rh/logs/`. The precedence is artifacts > STATUS.md > board and logs (rule 9), "
+                   "so when this file disagrees with a file on disk, the file wins and this one is "
+                   "fixed.",
         "location": "STATUS.md",
         "owner": "Orchestrator only (never delegated — rule 9)",
         "phase": "5 STATE and later",
@@ -243,10 +245,15 @@ ARTIFACTS: dict[str, dict] = {
             "## Limitations — includes every waived rule",
             "## Data availability — results/ files and the scripts that made them",
         ],
-        "template": "# <title>\n\n## 1 <Section heading from OUTPUT_LAYOUT.md>\n<prose>\n\n"
-                    "<!-- evidence: results/S05.csv | 10.1234/abcd §3 -->\n",
+        "template": "# <title>\n\n## 1 <Section heading from OUTPUT_LAYOUT.md>\n"
+                    "<the claim, with its numbers: 0.42>\n"
+                    "evidence: results/S05.csv, LITERATURE.md\n",
         "rules": [
             "No result without a file: an unsupported number does not exist (rule 7).",
+            "Every claim block ends with its own `evidence: <path>[, <path>]` line — the results "
+            "file or literature record that carries its numbers, never the manuscript itself. "
+            "`rh verify` checks that each path exists and that every number in the claim appears "
+            "in one of them; `rh verify --strict` is the phase-8 gate.",
             "Methods cite .rh/ENVIRONMENT.md versions; never re-type them.",
             "Every borrowed implementation is attributed via GAPS.md.",
             "Missing evidence is a hard stop — delete the claim, never soften it.",

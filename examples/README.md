@@ -17,7 +17,7 @@ Two different placeholder styles, deliberately different so they never collide:
 
 | Where | Style | Who fills it |
 |---|---|---|
-| `agents.commands.<role>`, `agents.spawn` (`.rh/env.json`) | `{model}` `{thinking}` `{skills}` `{prompt}` `{prompt_file}` `{root}` `{name}` `{role}` `{command}` | `rh` (from the config block) |
+| `agents.commands.<role>`, `agents.spawn` (`.rh/env.json`) | `{model}` `{thinking}` `{skills}` `{prompt}` `{prompt_file}` `{root}` `{name}` `{role}` `{agent_name}` `{command}` | `rh` (from the config block) |
 | These example scripts / prompt templates | `{{STEP}}` `{{TASK}}` `{{DELIVERABLE}}` `{{VERIFY}}` | you, the agent, with `sed`/`envsubst` before calling `rh spawn` |
 
 `${HOME}`-style shell variables survive untouched; only `{lowercase}` braces are
@@ -58,13 +58,15 @@ closing the pane stay with the Orchestrator — that is rule 9 and rule 13.
 rh env set \
   'agents.commands.researcher=<your binary> --model {model} --thinking {thinking} {prompt}' \
   'agents.roles.researcher={"provider":"<vendor>","model":"<model>","thinking":"medium"}' \
-  'agents.spawn=tmux new-window -n rh-{project}-{agent} -c {root} {command}'
+  'agents.spawn=tmux new-window -n {agent_name} -c {root} {command}'
 rh spawn researcher "read S07 of PLAN.md and implement it"
 ```
 
 Nothing above is `rh`-specific knowledge: if your harness takes `--prompt-file`
 instead of a positional prompt, write `... --prompt-file {prompt_file}` and `rh`
-uses the file it just wrote (`.rh/tmp/spawn-<role>-prompt.md`).
+uses the brief it just wrote (`.rh/briefs/<agent-name>.md`). `{prompt}` is a
+single line — read the brief and execute it — so a long prompt is never pasted
+into a pane.
 
 > These files ship in the **source** distribution (`MANIFEST.in`). A plain
 > `uv tool install rh-cli` installs the CLI and the bundled skill only — copy

@@ -26,10 +26,14 @@ Nothing here is advice. If a rule cannot be followed, stop and ask.
    it does not exist and may not appear in `MANUSCRIPT.md`.
 8. **"Done" requires proof.** Tests green, plan steps checked, Critique has no open blocking
    question. A claim without evidence is rework.
-9. **`STATUS.md` is the truth, and it is your own work.** Update it after every step and before
-   every question to the user. Never delegate that update. It is current state, not a diary: keep
-   the last ten history entries and move the older lines into the log of the step they belong to
-   (§7).
+9. **`STATUS.md` is state, not the top authority — and it is your own work.** The precedence is
+   **artifacts > `STATUS.md` > board and logs**: what the files on disk prove outranks the narrative,
+   and the narrative outranks the board and the logs. When they disagree, run `rh preflight` — it
+   names the source that lies and the one to fix first. A stale `STATUS.md` is a **defect fixed at
+   session start**, never state to inherit; "don't touch that file" is only valid as a recorded
+   rule-11 waiver. Update it after every step and before every question to the user, never delegate
+   that update, and keep it current state rather than a diary: the last ten history entries, older
+   lines into the log of the step they belong to (§7).
 10. **Re-read `.rh/env.json` and the environment record at the start of every phase.** Never cache
     them: a version recorded in phase 2 may have moved.
 11. **The user may waive a rule.** Name the waiver under `waivers:` in `STATUS.md` with the rule
@@ -37,8 +41,10 @@ Nothing here is advice. If a rule cannot be followed, stop and ask.
 12. **Verify the project path before opening an agent.** Resolve the root, confirm `.rh/` and
     `.rh/env.json` are there, state the path to the user, then spawn. Never open an agent in
     `$HOME`, a parent directory, or a neighbouring project.
-13. **Close what you opened.** When a spawned agent finishes, close its pane, window or tab and
-    record the close in `STATUS.md`. Agents left running spend the user's credits.
+13. **Close what you opened.** When a spawned agent finishes, it reports — a report file plus
+    `rh agent done <name>` — and you close the pane and record the close in `STATUS.md`. Closing
+    without a report is `rh agent done <name> --outcome closed`. Agents left running spend the
+    user's credits, and an unclosed agent holds an `agents.count` slot.
 14. **One agent means fresh eyes come from a new session, and a handoff is written for it.**
     With `agents.count = 1` nothing independent reviews the work. After a gate-heavy step (plan
     approved, implementation done, critique answered), tell the user to continue in a new session.
@@ -46,10 +52,17 @@ Nothing here is advice. If a rule cannot be followed, stop and ask.
     to watch out for. It is empty at `rh init`, `rh resume` reads it only when it has content, and
     you clear it with `rh handoff --clear` once absorbed. Never generate it from `STATUS.md` or
     `PLAN.md`; those are state, the handoff is the next move.
-15. **Names are project-scoped.** Two projects run at the same time, so every pane, window or
-    workspace is named `rh-<project>-<role>` (e.g. `rh-optics-researcher`), never `rh-<role>`.
-    Address an agent by that name; it is also the name in its own prompt. If two panes of one
-    role run at once, add a suffix and record it in `STATUS.md`.
+15. **Names are project-scoped and mechanically unique.** Every pane, window or workspace is named
+    `rh-<project>-<role>` (e.g. `rh-optics-researcher`), never `rh-<role>`, so two projects never
+    clash. `rh spawn` derives that name itself and appends `-2`, `-3` … when an open agent already
+    holds it; `--name <suffix>` only forces a meaningful suffix. The same name keys the brief
+    (`.rh/briefs/`), the report (`.rh/reports/`) and the state file (`.rh/agents/<name>.json`), so
+    never rename an agent by hand. Address it by that name, and record it in `STATUS.md`.
+16. **An assumed input may not carry a claim.** Every value a result multiplies is either
+    `confirmed` (with who and when) or `assumed` in `project.inputs` (phase 2). An assumed value may
+    not appear in a claim until it is confirmed, or waived under rule 11 by naming rule 16 — and a
+    waiver still appears in the manuscript's limitations. `rh env show` marks assumed entries and
+    `rh status` warns while one is unwaived.
 
 ## 1. Where things live
 
@@ -76,6 +89,11 @@ config and no project data.
   .rh/agents/<role>.md the role itself. `rh init` writes the six starter roles, each carrying
                        its §5 scope; narrow a role file with the user, and wire it into the
                        CLI's system-prompt area in `agents.commands.<role>`.
+  .rh/agents/<name>.json  one file per spawned agent: state open|done|blocked|failed|closed,
+                       role, report path, timestamps. Written by `rh spawn`, closed by
+                       `rh agent done`; `rh agent status` reads this directory.
+  .rh/briefs/<name>.md what that agent was told (role file, session facts, instructions)
+  .rh/reports/<name>.md what it reported back — the Orchestrator reads this, never a pane
   src/                 implementation
   results/             every produced number, table and figure, with the script that made it
 ```
@@ -127,25 +145,27 @@ is plain JSON.
     "commands": {
       // How an agent CLI is STARTED. Ask for it; never invent it. rh substitutes the
       // placeholders {model} {thinking} {skills} {prompt} {prompt_file} {agent_file}
-      // {root} {name} {project} {role}.
+      // {root} {name} {project} {role} {agent_name}.
       // {agent_file} is .rh/agents/<role>.md: put it in the harness's system-prompt
       // APPEND flag (pi: --append-system-prompt {agent_file}; claude:
       // --append-system-prompt-file {agent_file}; others: their equivalent). Never a
       // flag that REPLACES the system prompt, or the session loses its harness rules.
       // rh never hardcodes the flag name.
-      // The prompt goes positionally ({prompt}). Use {prompt_file} only for a CLI that
-      // has such a flag. pi has none: --prompt-template registers a /command and sends
-      // no message, so it cannot carry the launch prompt.
+      // {prompt} is ONE line: "Read .rh/briefs/<agent_name>.md and execute it." The brief
+      // holds the role prompt, the session facts and your instructions; {prompt_file}
+      // points at that same brief for a CLI that takes a file. Either way the agent
+      // reads the brief, so never paste a long prompt into a pane by hand.
       // The orchestrator gets no skill restriction: it must see every skill to decide
       // what each spawned agent receives.
       "orchestrator": "pi --model {model} --thinking {thinking} --append-system-prompt {agent_file} {prompt}",
       "researcher": "pi --model {model} --thinking {thinking} --skill {skills} --append-system-prompt {agent_file} {prompt}",
       "default": ""         // used by any role without its own command
     },
-    "spawn": "tmux new-window -n rh-{project}-{agent} -c {root} {command}",  // how `rh spawn` opens
+    "spawn": "tmux new-window -n {agent_name} -c {root} {command}",  // how `rh spawn` opens
                        // an agent; {command} is the launch command, shell-quoted. Empty =
-                       // start detached and log to .rh/logs/. `{project}` is the project-name
-                       // slug: name every pane `rh-<project>-<role>` so two projects never clash.
+                       // start detached and log to .rh/logs/. `{agent_name}` is the unique
+                       // `rh-<project>-<role>` name (with `-2` on collision); `{project}` and
+                       // `{role}` are still available if you want to name panes yourself.
     "shell": "fish",       // shell for `rh spawn terminal`; blank = $SHELL, else sh. Ask, never probe.
     "split": "vertical",   // pane layout for `rh spawn`: vertical | horizontal | window. Ask, never assume.
     "planners": {
@@ -238,8 +258,23 @@ Record it in `.rh/env.json` as `project.environment` (`{name, version, note}`, p
 source for the manuscript's methods section: never retype a version, and amend it only with a dated
 note.
 
+**Software is not the whole environment.** The numbers a result multiplies come from instrument
+settings, calibration values and datasheets, and those are not versions you can reinstall. Record
+them separately, in `project.inputs`, each as `{name, value, note, state, who, when}` with a state:
+
+- `confirmed` — the user (or a measurement) confirmed this value for *this* setup; it carries who
+  and when, and it may support a claim;
+- `assumed` — read off a datasheet, copied from a paper, or simply expected; it may not appear in a
+  claim until it is confirmed or waived under rule 11 (rule 16). `rh env show` marks it and
+  `rh status` / `rh tasks phase` warn while one is unwaived.
+
+Never let a specification-sheet value pass as a result's justification by listing it among the
+tools. Amend an input the same way as a version: a dated note, never a silent edit. Unknown or
+user-named tools are valid; an unnamed input is not.
+
 Exit gate: the user has named the tools and versions for every part of the phase 1 scope, and the
-record holds them. Unknown or user-named tools are valid.
+record holds them; every input a claimed result will multiply carries `confirmed` (who, when) or
+`assumed`.
 
 ### Phase 3, LITERATURE: `papers/`, `LITERATURE.md`, `OUTPUT_LAYOUT.md`, `GAPS.md`
 
@@ -321,6 +356,16 @@ never a spawned agent (rule 9). It is current state, not a diary: when history g
 move the dropped lines into that step's event log under `.rh/logs/` (§7) instead of keeping the
 whole diary here.
 
+**Session start is a preflight, not a question.** A resumed session inherits three descriptions of
+the same state — the artifacts, this file, the board — and they drift. Before your first question to
+the user, run `rh preflight`: it compares the board phase, this file's `phase:`/`step:` header and
+the artifacts, checks that every `working` task has an open agent behind it (and every open agent a
+task), and that every `complete` task's declared deliverable exists and is not older than the task.
+It prints the precedence (artifacts > `STATUS.md` > board and logs) and which source to fix first.
+Fix that source, say which one it was, and only then ask anything. With no session in progress,
+`rh agent status` is the same check for agents: `open` is not `done`, and a report path is where the
+answer is.
+
 Exit gate: it describes reality. Re-read it and check before answering any "where are we" question.
 
 ### Phase 6, IMPLEMENT: `src/`, `results/`
@@ -362,12 +407,20 @@ topics, equations and figures. If the layout is wrong, fix `OUTPUT_LAYOUT.md` fi
 Reviewer checks claim against evidence, number against table, and section against layout; Critique
 signs off. Missing evidence is a hard stop: delete the claim, never soften it.
 
+**Every claim block ends with its own evidence line** — `evidence: results/S07.csv, LITERATURE.md` —
+naming the results file or literature record that carries its numbers, never the manuscript itself.
+Then `rh verify` pairs each claim with exactly those files: the path must exist, and every number in
+the claim (years and bracketed citations excepted) must appear in one of them. Without `--strict`
+an evidence-less claim is advisory; `rh verify --strict` fails it, and that is this phase's gate. The
+check is a floor, not a proof — it cannot tell whether a coincidental match is the intended one — so
+the Reviewer still reads claim against evidence.
+
 If the user writes in `papr` (`literature.library`), its Typst project can be the writing surface —
 the user names the file and `.rh/OUTPUT_LAYOUT.md` still drives the sections. `MANUSCRIPT.md` (or the
 named file) stays the record the Reviewer reads: a claim a tool renders is not a claim with evidence.
 
-Exit gate: every claim has an evidence line, no number disagrees with its source, and Critique has
-signed off.
+Exit gate: every claim has an evidence line, `rh verify --strict` passes, no number disagrees with
+its source, and Critique has signed off.
 
 ### Phase 9, CLOSE
 
@@ -423,13 +476,18 @@ puts the role file in its `{agent_file}` slot. For a plain shell rather than an 
 asking the user for a layout when none is set.
 
 Spawn with `rh spawn <role> "<instructions>"` (or `--prompt-file`). The launch command, model,
-thinking level and skill selection all come from `agents.commands.<role>`; `rh spawn` inserts the
-role file, appends the session facts (model, skills, board tasks, current phase) to the prompt, and
-opens it with `agents.spawn`. Preview with `rh spawn <role> ... --dry-run`. If `rh` warns that
+thinking level and skill selection all come from `agents.commands.<role>`; `rh spawn` writes the
+full role prompt — role file, session facts (model, skills, board tasks, current phase) and your
+instructions — to `.rh/briefs/<agent-name>.md`, then opens the pane with one line: *read that file
+and execute it*. The role file also states the completion clause: the report goes to
+`.rh/reports/<agent-name>.md` and the agent's last act is `rh agent done <agent-name>`. Preview with
+`rh spawn <role> ... --dry-run` (it prints the brief and writes nothing). If `rh` warns that
 `{model}`, `{thinking}` or `{skills}` is missing from a template, fix the command with the user
 instead of accepting the harness default. Before spawning, print the project path and confirm
-`.rh/env.json` is there (rule 12), and record the spawn in `STATUS.md`. Confirm count and models with
-the user if anything differs from `.rh/env.json`. Confirm the close the same way (rule 13).
+`.rh/env.json` is there (rule 12), and record the spawn name in `STATUS.md`. Confirm count and models
+with the user if anything differs from `.rh/env.json`. You never learn the outcome from a screen:
+`rh agent status` lists `open | done | blocked | failed | closed` and each report path, and
+`rh agent wait --name <agent>` blocks when you want to wait. Confirm the close the same way (rule 13).
 `rh resume` always runs the Orchestrator in the terminal the user called it from; opening panes is
 your own work, not the resume command's. The `rh` repo's `examples/` holds starter scripts and
 per-role prompt templates with `{{PLACEHOLDER}}`s.
@@ -440,15 +498,19 @@ per-role prompt templates with `{{PLACEHOLDER}}`s.
 2. Pick the role whose scope owns the work. If `.rh/agents/<role>.md` or
    `agents.commands.<role>` is missing, create/ask for it first — never spawn an undefined role.
 3. Preview: `rh spawn <role> "<instructions>" --dry-run`. It must show `mode: pane`, the model and
-   skills from `.rh/env.json`, and a name of the form `rh-<project>-<role>`.
-4. Open it: `rh spawn <role> "<instructions>"`. The prompt carries the role file, the session facts
-   (model, skills, current phase, board tasks) and its backend name.
-5. Talk to it **by that name**, not by "the researcher". Use the backend skill from
-   `agents.backend` (`tmux`: `tmux send-keys -t rh-<project>-<role> '…' Enter`; herdr and tuios have
-   their own send/read commands). Two projects never share a name, so `rh-optics-researcher` and
-   `rh-audio-researcher` can run side by side.
-6. Record the spawn (role, model, name) in `STATUS.md`, and when the job is done close the pane and
-   record the close (rule 13) — an agent left running spends the user's credits.
+   skills from `.rh/env.json`, the derived agent name, and the brief path.
+4. Open it: `rh spawn <role> "<instructions>"`. It writes `.rh/briefs/<agent-name>.md`, opens the
+   pane with the one-line launch message, and writes `.rh/agents/<agent-name>.json` (`state: open`).
+5. Talk to it **by that name**, not by "the researcher". Send a *short* line — point at a file when
+   the message is long, e.g. `Read .rh/notes/<file>.md and do it.` — so nothing long is pasted by
+   hand. Use the backend skill from `agents.backend` (`tmux`: `tmux send-keys -t <agent-name> '…'
+   Enter`; herdr and tuios have their own send/read commands). The `Enter` is not optional: a line
+   without it sits unsubmitted and looks like a running agent.
+6. Record the spawn (role, model, agent name) in `STATUS.md`. Then read the outcome, not the pane:
+   `rh agent status` for one glance, `rh agent wait --name <agent-name>` if you must block, and the
+   report at `.rh/reports/<agent-name>.md` for the work. Close with `rh agent done <agent-name>
+   --outcome closed` when the agent did not report (rule 13) — an agent left open holds an
+   `agents.count` slot.
 
 With `agents.count = 1` there is nothing to spawn: do the hat yourself and hand the user to a fresh
 session at the gates (rule 14).
@@ -610,8 +672,11 @@ Commands, by phase:
 | `rh tasks reorder <id> (--before\|--after) <id>` | 4-6 | move a task inside its phase; list order is display order |
 | `rh tasks set <id> idle\|working\|complete\|cancelled` | 5-6 | board state; subtask ids work too. `rh tasks` shows the board (cancelled work is counted in one footer line; `rh tasks -c` shows it) |
 | `rh tasks phase` / `rh tasks phase N` | any | shows the phase and its gate, or advances it gated; `--force` waives, so record it (rule 11) |
+| `rh preflight [--json]` | any | reconciles board phase, `STATUS.md` header and the artifacts; names the source that lies and fixes nothing itself. Run it at session start, before any question (rule 9) |
 | `rh resume` / `rh -r` | any | execs the Orchestrator here, per `agents.commands.orchestrator`; `--dry-run` prints the command |
-| `rh spawn <role> [prompt]` | any | opens a role agent per §5; `--dry-run`, `--inline`, `--prompt-file`, `--split` |
+| `rh spawn <role> [prompt]` | any | opens a role agent per §5: writes `.rh/briefs/<agent-name>.md`, launches with one line, records `state: open`; `--dry-run`, `--inline`, `--prompt-file`, `--split`, `--name` |
+| `rh agent status` / `rh agent done <name>` / `rh agent wait [--name]` | any | per-agent state `open\|done\|blocked\|failed\|closed` with its report path; `done` refuses an empty report, `--outcome closed` is the rule-13 close, `wait` blocks |
+| `rh verify [--strict] [--json]` | 8 | every claim block's `evidence:` line must exist, and every number in it must appear in a cited file (rule 7) |
 | `rh spawn terminal <cmd>` | any | opens a plain shell, not an agent |
 | `rh agent list` / `info <role>` / `write [role]` | any | list roles, render one role file, create missing starter files |
 | `rh doctor` | any | verify what the config names |
@@ -655,8 +720,8 @@ Contracts that keep the two layers consistent:
 4. **Same-terminal resume, explicit spawning.** Only the Orchestrator follows `rh resume`, and it
    never opens a pane: it execs the agent where the user typed the command. `rh spawn` opens one
    role agent through `agents.spawn`, else detached with a log in `.rh/logs/`, under rules 12 and 13.
-   The pane name is `rh-<project>-<role>` (`{project}` + `{agent}` in `agents.spawn`), so parallel
-   projects never collide.
+   The pane name is the unique agent name (`{agent_name}` in `agents.spawn`), so parallel projects
+   never collide and two agents of one role stay distinguishable.
 5. **`rh workflow` prefers an installed renderer.** `bm` (beautiful-mermaid CLI) first, then
    `mermaid-ascii`, `mermansi`, `mermaid2term`, `merx`, `ma`, and a compact text view when none fits.
 6. **`--json` works on every command** for agent reads. Never parse the pretty output.

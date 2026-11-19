@@ -290,7 +290,7 @@ PHASE_EXIT = {
     5: "STATUS.md describes reality (phase, step, blockers, history)",
     6: "plan steps checked, tests green, results/ reproduces from a clean run",
     7: "zero open blocking questions from Critique",
-    8: "every claim has an evidence line, Critique signed off",
+    8: "every claim has an evidence line and `rh verify --strict` passes, Critique signed off",
     9: "all steps checked, close log written, handoff written, push question answered",
 }
 

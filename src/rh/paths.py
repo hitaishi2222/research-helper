@@ -107,7 +107,7 @@ def archive_tree(root: Path, src: Path) -> Path:
 def ensure_layout(root: Path) -> Path:
     """Create .rh/ subfolders. Returns the .rh path."""
     d = rh_dir(root)
-    for sub in ("logs", "notes", "tasks", "tmp"):
+    for sub in ("logs", "notes", "tasks", "tmp", "briefs", "reports"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "results").mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,8 @@ Commands:
   rh resume / rh -r       # exec the orchestrator (model + thinking from .rh/env.json) here
   rh spawn <role> [prompt] ...   # open another role agent with the env.json command
   rh agent list|info|write|status   # role files (.rh/agents/<role>.md) and running agents
+  rh preflight            # reconcile board, STATUS.md and the artifacts (session start)
+  rh verify [--strict]    # every claim's evidence line, and its numbers against the cited files
   rh info <FILE.md>       # what that artifact is for, who owns it, its sections
   rh skill install [--dest DIR] [--force]
   rh describe   # AI-friendly map: phases, layout, env schema (decisions you must surface)
@@ -32,6 +34,8 @@ import os
 import shlex
 import shutil
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
@@ -43,14 +47,16 @@ from rich.prompt import Prompt
 from . import __version__, config, paths, ui, workflow
 from . import add as add_mod
 from . import agents as agents_mod
+from . import agentstate as agentstate_mod
 from . import artifacts as artifacts_mod
 from . import checklist as checklist_mod
 from . import doctor as doctor_mod
+from . import preflight as preflight_mod
+from . import verify as verify_mod
 from . import resume as resume_mod
 from . import search as search_mod
 from . import spawn as spawn_mod
 from . import tasks as tasks_mod
-
 
 def with_root(fn):
     def wrapper(args):
@@ -602,6 +608,13 @@ def _safe_nested(env: dict, key: str):
         return None
 
 
+def _input_state(state: str) -> str:
+    """`confirmed` as a quiet tick, `assumed` as the warning it is."""
+    if state == "assumed":
+        return ui.colorize("⚠ assumed", ui.YELLOW)
+    return ui.colorize("✓ confirmed", ui.GREEN) if state else "—"
+
+
 @with_root
 def cmd_env_show(args, root: Path):
     env = config.load_env(root)
@@ -621,10 +634,36 @@ def cmd_env_show(args, root: Path):
         print()
         print(ui.colorize("Project environment (the software this project runs)", ui.DIM))
         print(ui.table(
-            ["software", "version", "what it is for"],
+            ["software", "version", "state", "what it is for"],
             [[str(t.get("name", "")), str(t.get("version") or "—"),
+              _input_state(str(t.get("state") or "confirmed")),
               str(t.get("note") or "")] for t in tools],
         ))
+    inputs = (env.get("project") or {}).get("inputs") or []
+    inputs = [i for i in inputs if isinstance(i, dict) and str(i.get("name", "")).strip()]
+    if inputs:
+        assumed = config.assumed_inputs(env)
+        print()
+        print(
+            ui.colorize(
+                "Project inputs (values a result multiplies — confirmed or assumed)", ui.DIM
+            )
+        )
+        print(ui.table(
+            ["input", "value", "state", "who / when", "note"],
+            [[str(i.get("name", "")), str(i.get("value") or "—"),
+              _input_state(str(i.get("state") or "")),
+              " · ".join(x for x in (str(i.get("who") or ""), str(i.get("when") or "")) if x) or "—",
+              str(i.get("note") or "")] for i in inputs],
+        ))
+        if assumed:
+            print(
+                ui.colorize(
+                    f"⚠ {len(assumed)} of {len(inputs)} assumed — a claim may not rest on one "
+                    "until it is confirmed (who, when) or waived under rule 16",
+                    ui.YELLOW,
+                )
+            )
     if config.user_plans(env):
         print()
         print(ui.colorize(
@@ -1330,6 +1369,8 @@ def cmd_phase_set(args, root: Path):
             else ui.colorize("unmet", ui.YELLOW)
         )
         print(f"  exit gate ({status}): {exit_gate(current)}")
+        for warning in config.input_warnings(root):
+            print(ui.colorize(f"  ⚠ {warning}", ui.YELLOW))
         if args.phase is None:
             nxt = min(current + 1, 9)
             if nxt != current:
@@ -1422,7 +1463,7 @@ def cmd_describe(args, root: Path):
             "results/": "produced numbers + generating script",
             "papers/": "downloaded PDFs — keep them, never deleted by rh",
             "PLAN.md": "approved steps (§4 template)",
-            "STATUS.md": "truth (§5)",
+            "STATUS.md": "state (§5) — artifacts outrank it (rule 9); `rh preflight` names the liar",
             "LITERATURE.md": "paper takes with DOI (§3)",
             "OUTPUT_LAYOUT.md": "output skeleton + comparable-paper patterns (§3)",
         },
@@ -1663,9 +1704,13 @@ def cmd_doctor(args, root: Path):
         return 0 if data["ok"] else 1
     print(ui.banner("Doctor", f"root: {root}"))
     for item in data["checks"]:
-        mark = (
-            ui.colorize("[✓]", ui.GREEN) if item["ok"] else ui.colorize("[✗]", ui.RED)
-        )
+        if not item["ok"]:
+            mark = ui.colorize("[✗]", ui.RED)
+        elif item.get("warn"):
+            # advisory: doctor reports it and still exits 0
+            mark = ui.colorize("[⚠]", ui.YELLOW)
+        else:
+            mark = ui.colorize("[✓]", ui.GREEN)
         print(f"  {mark} {item['id']:28} {item['detail']}")
     print()
     print(
@@ -1833,49 +1878,186 @@ def _spawn_terminal(args, root: Path):
     return 0
 
 
+def _age(stamp: str) -> str:
+    """Human age of an ISO timestamp — how long an agent has been open."""
+    try:
+        started = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    secs = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+    if secs < 90:
+        return f"{int(secs)}s"
+    if secs < 5400:
+        return f"{int(secs // 60)}m"
+    return f"{secs / 3600:.1f}h"
+
+
+def _legacy_spawns(root: Path) -> list[dict]:
+    """`spawns.jsonl` rows written before state files existed (no name)."""
+    f = paths.logs_dir(root) / "spawns.jsonl"
+    if not f.exists():
+        return []
+    rows = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a torn line at the tail of an append-only file
+        if isinstance(rec, dict) and not rec.get("name"):
+            rec["state"] = "unrecorded"
+            rec["outcome"] = ""
+            rec["report"] = ""
+            rec["name"] = ""
+            rows.append(rec)
+    return rows
+
+
 @with_root
 def cmd_agent_status(args, root: Path):
-    """`rh agent status` — who is running, on which model, from .rh/logs/spawns.jsonl."""
-    f = paths.logs_dir(root) / "spawns.jsonl"
-    rows: list[dict] = []
-    if f.exists():
-        for line in f.read_text(encoding="utf-8").splitlines():
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue  # a torn line at the tail of an append-only file
+    """`rh agent status` — open/done per agent, from `.rh/agents/<name>.json`.
+
+    State files are the answer to "is it done": a spawn record is history, and a
+    pane name alone never told anyone whether work was still running.
+    """
+    rows = agentstate_mod.all_records(root)
+    legacy = _legacy_spawns(root)
     if getattr(args, "json", False):
-        ui.json_out(rows)
+        ui.json_out(rows + legacy)
         return 0
     print(ui.banner("Agent status", f"root: {root}"))
-    if not rows:
+    if not rows and not legacy:
         print(
             ui.colorize(
-                "No spawns recorded yet — `rh spawn <role>` writes .rh/logs/spawns.jsonl from here on.",
-                ui.DIM,
-            )
-        )
-        print(
-            ui.colorize(
-                "  pane spawns record no pid, so they never count against agents.count; "
-                "the panes are visible to the user instead.",
+                "No agents recorded — `rh spawn <role>` writes .rh/agents/<name>.json "
+                "from here on; finishing agents run `rh agent done <name>`.",
                 ui.DIM,
             )
         )
         return 0
-    for r in rows:
-        alive = ""
-        pid = r.get("pid")
-        if pid:
-            try:
-                os.kill(pid, 0)
-                alive = "alive"
-            except OSError:
-                alive = "dead"
-        who = f"pid={pid} ({alive})" if pid else "pane (backend-owned)"
+    if rows:
+        print(ui.table(
+            ["agent", "state", "outcome", "report", "age"],
+            [
+                [
+                    str(r.get("name", "?")),
+                    ui.colorize(
+                        str(r.get("state", "")),
+                        ui.CYAN
+                        if r.get("state") == agentstate_mod.OPEN
+                        else ui.GREEN,
+                    ),
+                    str(r.get("outcome") or "—"),
+                    str(r.get("report") or "—"),
+                    _age(str(r.get("started") or "")),
+                ]
+                for r in rows
+            ],
+        ))
+    if legacy:
+        print()
         print(
-            f"  {r.get('role', '?'):12} {who} model={r.get('model') or '—'} mode={r.get('mode')} ts={r.get('ts', '')}"
+            ui.colorize(
+                "Spawn history without a state file (written before `rh agent done`):",
+                ui.DIM,
+            )
         )
+        for r in legacy:
+            print(
+                ui.colorize(
+                    f"  {r.get('role', '?'):12} mode={r.get('mode')} ts={r.get('ts', '')}",
+                    ui.DIM,
+                )
+            )
+    open_now = [r for r in rows if r.get("state") == agentstate_mod.OPEN]
+    if open_now:
+        print()
+        print(
+            ui.colorize(
+                f"{len(open_now)} open — read a finished agent's report at its path; "
+                "close an abandoned pane with `rh agent done <name> --outcome closed`.",
+                ui.DIM,
+            )
+        )
+    return 0
+
+
+@with_root
+def cmd_agent_done(args, root: Path):
+    """`rh agent done <name>` — record an agent's completion, report and all."""
+    name = (getattr(args, "name", None) or "").strip()
+    outcome = (getattr(args, "outcome", None) or "ok").strip()
+    try:
+        rec = agentstate_mod.mark_done(
+            root, name, report=getattr(args, "report", None), outcome=outcome
+        )
+    except ValueError as exc:
+        print(ui.colorize(f"✗ {exc}", ui.RED), file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        ui.json_out(rec)
+        return 0
+    print(
+        ui.colorize(
+            f"✓ {rec['name']} → {rec['state']}  report: {rec.get('report') or '—'}",
+            ui.GREEN if rec["state"] != "closed" else ui.DIM,
+        )
+    )
+    return 0
+
+
+@with_root
+def cmd_agent_wait(args, root: Path):
+    """`rh agent wait [--name] [--timeout]` — block until open agents report.
+
+    Pull-based on purpose: an agent cannot type into the Orchestrator's pane, so
+    the Orchestrator reads the marker instead of a spinner. `--timeout 0` waits
+    without a limit.
+    """
+    name = (getattr(args, "name", None) or "").strip()
+    timeout = int(getattr(args, "timeout", None) or 0)
+    targets = [name] if name else agentstate_mod.open_names(root)
+    if name and agentstate_mod.load(root, name) is None:
+        print(
+            ui.colorize(
+                f"✗ no agent named {name!r} — `rh agent status` lists what is open",
+                ui.RED,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    if not targets:
+        if getattr(args, "json", False):
+            ui.json_out({"waited": [], "open": [], "timed_out": False})
+            return 0
+        print(ui.colorize("No open agents — nothing to wait for.", ui.DIM))
+        return 0
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+    while True:
+        still = [n for n in targets if (agentstate_mod.load(root, n) or {}).get("state") == agentstate_mod.OPEN]
+        if not still:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+    records = [agentstate_mod.load(root, n) or {"name": n, "state": "missing"} for n in targets]
+    still = [str(r["name"]) for r in records if r.get("state") == agentstate_mod.OPEN]
+    if getattr(args, "json", False):
+        ui.json_out({"waited": records, "open": still, "timed_out": bool(still)})
+        return 1 if still else 0
+    for rec in records:
+        print(
+            f"  {rec.get('name')}: {rec.get('state')}"
+            + (f" · outcome {rec['outcome']}" if rec.get("outcome") else "")
+            + (f" · report {rec['report']}" if rec.get("report") else "")
+        )
+    if still:
+        print(
+            ui.colorize(
+                f"✗ timed out — still open: {', '.join(still)}", ui.YELLOW
+            ),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -2016,14 +2198,25 @@ def cmd_spawn(args, root: Path):
         extra = f"{extra}\n{text}".strip() if extra else text
     name = env.get("project", {}).get("name") or "untitled"
     store = tasks_mod.TaskStore(root)
-    prompt = spawn_mod.build_role_prompt(root, env, role, store, extra=extra)
-    prompt_file = (
-        paths.rh_dir(root) / "tmp" / f"spawn-{add_mod.slugify(role)}-prompt.md"
+    # The name keys the brief, the report and the state file, so a second agent
+    # of one role can never overwrite the first (SKILL.md rule 15 / §5).
+    agent_name = spawn_mod.derive_name(root, env, role, getattr(args, "name", None) or "")
+    brief = agentstate_mod.brief_path(root, agent_name)
+    brief_rel = f"{paths.RH_DIR}/briefs/{agent_name}.md"
+    report_rel = f"{paths.RH_DIR}/reports/{agent_name}.md"
+    prompt = spawn_mod.build_role_prompt(
+        root, env, role, store, extra=extra, agent_name=agent_name
     )
     if not getattr(args, "dry_run", False):  # --dry-run writes nothing
-        prompt_file.parent.mkdir(parents=True, exist_ok=True)
-        prompt_file.write_text(prompt + "\n", encoding="utf-8")
-    plan = spawn_mod.launch_plan(root, env, role, prompt, prompt_file)
+        brief.parent.mkdir(parents=True, exist_ok=True)
+        brief.write_text(prompt + "\n", encoding="utf-8")
+        (paths.rh_dir(root) / "reports").mkdir(parents=True, exist_ok=True)
+    # One line, so a long brief is never pasted (and never half-pasted) by hand:
+    # the harness submits this itself, and the agent reads the file.
+    launch = f"Read {brief_rel} and execute it."
+    plan = spawn_mod.launch_plan(root, env, role, launch, brief, agent_name=agent_name)
+    plan["brief"] = brief_rel
+    plan["report"] = report_rel
     if plan["argv"] is None:
         if plan.get("error"):
             print(ui.colorize(f"✗ {plan['error']}", ui.RED), file=sys.stderr)
@@ -2034,9 +2227,12 @@ def cmd_spawn(args, root: Path):
     budget = int((env.get("agents") or {}).get("count") or 1)
     running = spawn_mod.running_count(root)
     if running >= budget and not getattr(args, "force", False):
+        open_now = agentstate_mod.open_names(root)
+        detail = f" open: {', '.join(open_now)}" if open_now else ""
         print(
             ui.colorize(
-                f"✗ agents.count={budget} reached ({running} running) — close one (rule 13) or pass --force",
+                f"✗ agents.count={budget} reached ({running} open){detail} — "
+                "close one with `rh agent done <name> --outcome closed` (rule 13) or pass --force",
                 ui.RED,
             ),
             file=sys.stderr,
@@ -2049,13 +2245,17 @@ def cmd_spawn(args, root: Path):
             {
                 "root": str(root),
                 "role": role,
+                "agent_name": agent_name,
                 "argv": plan["argv"],
                 "command": preview["command"],
                 "mode": preview["mode"],
                 "log": preview["log"],
                 "source": plan["source"],
                 "spawn_source": preview.get("source", ""),
-                "prompt_file": str(prompt_file),
+                "brief": brief_rel,
+                "report": report_rel,
+                "launch": launch,
+                "prompt_file": str(brief),
                 "prompt": prompt,
                 "model": plan["model"],
                 "provider": plan["provider"],
@@ -2077,6 +2277,11 @@ def cmd_spawn(args, root: Path):
         model += f" · thinking {plan['thinking']}"
     print(ui.banner(f"rh spawn — {role}", f"project: {root} · {name}"))
     print(
+        f"{ui.colorize('agent:', ui.DIM)} {agent_name}"
+        f"  {ui.colorize('brief:', ui.DIM)} {brief_rel}"
+        f"  {ui.colorize('report:', ui.DIM)} {report_rel}"
+    )
+    print(
         f"{ui.colorize('model:', ui.DIM)} {model}"
         f"  {ui.colorize('skills:', ui.DIM)} {', '.join(plan['skills']) or '—'}"
         f"  {ui.colorize('agents.count:', ui.DIM)} {(env.get('agents') or {}).get('count')}"
@@ -2087,12 +2292,12 @@ def cmd_spawn(args, root: Path):
         f"{preview.get('source') or plan['source'] or 'agents.cli'}"
     )
     print(f"{ui.colorize('command:', ui.DIM)} {preview['command']}")
+    print(f"{ui.colorize('launch:', ui.DIM)} {launch}")
     if preview["log"]:
         print(f"{ui.colorize('log:', ui.DIM)} {preview['log']}")
     for note in notes:
         print(ui.colorize(f"⚠ {note}", ui.YELLOW))
-    print(f"{ui.colorize('prompt:', ui.DIM)} {prompt_file}")
-    if getattr(args, "dry_run", False):
+    if getattr(args, "dry_run", False):  # the brief itself is the useful preview
         print()
         print(prompt)
         return 0
@@ -2100,7 +2305,7 @@ def cmd_spawn(args, root: Path):
     if getattr(args, "inline", False):
         _started, detail = spawn_mod.exec_argv(root, plan["argv"])
         print(ui.colorize(f"✗ {detail}", ui.RED), file=sys.stderr)
-        print(ui.colorize(f"  prompt ready at {prompt_file}", ui.DIM), file=sys.stderr)
+        print(ui.colorize(f"  brief ready at {brief_rel}", ui.DIM), file=sys.stderr)
         return 1
     result = spawn_mod.spawn_now(root, env, role, plan)
     if result["mode"] == "pane":
@@ -2124,7 +2329,8 @@ def cmd_spawn(args, root: Path):
         )
     print(
         ui.colorize(
-            "  record the spawn in STATUS.md; close it when the job is done (rules 12–13).",
+            f"  record it in STATUS.md as {agent_name}; when it is done read "
+            f"`rh agent status`, and close it (rule 13).",
             ui.DIM,
         )
     )
@@ -2135,6 +2341,88 @@ def _short(text: str, limit: int = 88) -> str:
     """First sentence of a purpose, trimmed — for one-line tables."""
     sentence = text.split(". ")[0].rstrip(".")
     return sentence if len(sentence) <= limit else sentence[: limit - 1].rstrip() + "…"
+
+
+@with_root
+def cmd_preflight(args, root: Path):
+    """`rh preflight` — reconcile phase, board and artifacts before asking anything."""
+    data = preflight_mod.check(root)
+    if getattr(args, "json", False):
+        ui.json_out(data)
+        return 0 if data["ok"] else 1
+    print(ui.banner("Preflight", f"root: {root}"))
+    src = data["sources"]
+    print(ui.colorize(f"precedence: {data['precedence']}", ui.DIM))
+    print(
+        f"  board {src['board']['phase_name']}"
+        f"  · STATUS.md phase {src['status']['phase']} step {src['status']['step'] or '—'}"
+        f"  · artifacts {src['artifacts']['phase_name'] or '(none yet)'}"
+    )
+    print()
+    if not data["findings"]:
+        print(ui.colorize("✓ nothing contradictory — go on.", ui.GREEN))
+        return 0
+    for f in data["findings"]:
+        if f["waived"]:
+            mark = ui.colorize("[waived]", ui.DIM)
+        elif f["severity"] == "error":
+            mark = ui.colorize("[✗]", ui.RED)
+        else:
+            mark = ui.colorize("[⚠]", ui.YELLOW)
+        rule = f" (rule {f['rule']})" if f["rule"] else ""
+        print(f"  {mark} {f['source']}: {f['message']}{rule}")
+    print()
+    if data["fix_first"]:
+        print(
+            ui.colorize(
+                f"fix first: {data['fix_first']} — a stale source is a defect fixed at "
+                "session start, not state to inherit (a rule-11 waiver is the only excuse)",
+                ui.YELLOW,
+            )
+        )
+    return 0 if data["ok"] else 1
+
+
+@with_root
+def cmd_verify(args, root: Path):
+    """`rh verify` — every claim's evidence line, and its numbers against those files."""
+    data = verify_mod.check(root)
+    strict = bool(getattr(args, "strict", False))
+    has_advisory = any(f["type"] == "no-evidence" for f in data["findings"])
+    failed = (not data["ok"]) or (strict and has_advisory)
+    if getattr(args, "json", False):
+        ui.json_out({**data, "strict": strict, "failed": failed})
+        return 1 if failed else 0
+    print(ui.banner("Verify — claims against their evidence", data["file"]))
+    if data["message"]:
+        print(ui.colorize(data["message"], ui.DIM))
+        return 0
+    print(
+        ui.colorize(
+            f"{data['claims']} claim block(s); each `evidence:` line is checked, and "
+            "every number in a claim must appear in a cited file.",
+            ui.DIM,
+        )
+    )
+    if not data["findings"]:
+        print(ui.colorize("✓ every claim is paired with a file that carries it.", ui.GREEN))
+        return 0
+    for f in data["findings"]:
+        if f["type"] == "no-evidence":
+            mark = ui.colorize("[⚠]", ui.YELLOW)
+        else:
+            mark = ui.colorize("[✗]", ui.RED)
+        print(f"  {mark} line {f['line']}: {f['message']} (rule 7)")
+    print()
+    if has_advisory and not strict:
+        print(
+            ui.colorize(
+                "claims without evidence are advisory here — `rh verify --strict` fails them, "
+                "and that is the phase-8 gate.",
+                ui.DIM,
+            )
+        )
+    return 1 if failed else 0
 
 
 @with_root
@@ -2591,6 +2879,13 @@ def spawn(
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     split: Annotated[str | None, typer.Option("--split")] = None,
     force: Annotated[bool, typer.Option("--force")] = False,
+    agent_name: Annotated[
+        str | None,
+        typer.Option(
+            "--name",
+            help="force the agent-name suffix; uniqueness is automatic (`-2`, `-3` …)",
+        ),
+    ] = None,
     root: RootOpt = None,
     as_json: JsonOpt = False,
 ):
@@ -2601,7 +2896,7 @@ def spawn(
                 ctx, root, as_json,
                 agent=agent, text=text or [], prompt=prompt,
                 prompt_file=prompt_file, inline=inline, dry_run=dry_run,
-                split=split, force=force,
+                split=split, force=force, name=agent_name,
             )
         )
     )
@@ -2613,7 +2908,7 @@ def doctor(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
 
 
 agent_app = typer.Typer(
-    help="role files and running agents: list, info, write, status",
+    help="role files and running agents: list, info, write, status, done, wait",
     no_args_is_help=False,
 )
 app.add_typer(agent_app, name="agent")
@@ -2651,9 +2946,53 @@ def agent_write(
     raise typer.Exit(cmd_agent(_ns(ctx, root, as_json, mode="write", role=role)))
 
 
-@agent_app.command("status", help="who is running, on which model, from .rh/logs/spawns.jsonl")
+@agent_app.command("status", help="per agent: open | done | blocked | failed | closed, plus its report")
 def agent_status(ctx: typer.Context, root: RootOpt = None, as_json: JsonOpt = False):
     raise typer.Exit(cmd_agent_status(_ns(ctx, root, as_json)))
+
+
+@agent_app.command("done", help="record an agent's completion; refuses without a report")
+def agent_done(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="the agent name, e.g. rh-optics-researcher")],
+    report: Annotated[
+        str | None,
+        typer.Option("--report", help="report path (default: .rh/reports/<name>.md)"),
+    ] = None,
+    outcome: Annotated[
+        str,
+        typer.Option(
+            "--outcome",
+            help="ok | blocked | failed | closed (closed = rule-13 close, no report needed)",
+        ),
+    ] = "ok",
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    _pick(outcome, agentstate_mod.OUTCOMES, "outcome")
+    raise typer.Exit(
+        cmd_agent_done(
+            _ns(ctx, root, as_json, name=name, report=report, outcome=outcome)
+        )
+    )
+
+
+@agent_app.command("wait", help="block until the named agent, or every open agent, reports")
+def agent_wait(
+    ctx: typer.Context,
+    name: Annotated[
+        str | None, typer.Option("--name", help="wait for one agent instead of all open")
+    ] = None,
+    timeout: Annotated[
+        int,
+        typer.Option("--timeout", help="seconds before giving up (0 = no limit)"),
+    ] = 900,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(
+        cmd_agent_wait(_ns(ctx, root, as_json, name=name, timeout=timeout))
+    )
 
 
 log_app = typer.Typer(help="`rh log tail [N]` — newest §7 event logs", no_args_is_help=False)
@@ -2683,6 +3022,28 @@ def handoff(
     as_json: JsonOpt = False,
 ):
     raise typer.Exit(cmd_handoff(_ns(ctx, root, as_json, clear=clear)))
+
+
+@app.command("preflight", help="reconcile phase, STATUS.md and the board before you ask the user anything")
+def preflight(
+    ctx: typer.Context,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_preflight(_ns(ctx, root, as_json)))
+
+
+@app.command("verify", help="check every manuscript claim against the evidence it cites (rule 7)")
+def verify(
+    ctx: typer.Context,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="also fail on claims with no evidence line (the phase-8 gate)"),
+    ] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_verify(_ns(ctx, root, as_json, strict=strict)))
 
 
 @app.command("info", help="describe an artifact: what it is for, owner, sections, template")
@@ -2733,6 +3094,8 @@ KNOWN_CMDS = {
     "agent",
     "log",
     "handoff",
+    "preflight",
+    "verify",
 }
 
 # Short aliases, expanded only when no explicit subcommand is named.

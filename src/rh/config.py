@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import paths
+from . import paths, statusmd
 from .tasks import TaskStore
 
 DEFAULT_ENV: dict = {
@@ -63,6 +63,10 @@ DEFAULT_ENV: dict = {
 }
 
 AGENT_BACKENDS = ("tmux", "herdr", "tuios", "none")
+
+# Every value a result multiplies is either confirmed (with who/when) or assumed.
+INPUT_STATES = ("confirmed", "assumed")
+ASSUMED_RULE = 16
 AGENT_SPLITS = ("vertical", "horizontal", "window")
 PAYWALL_POLICIES = ("ask_user", "skip")
 
@@ -182,8 +186,16 @@ ENV_SCHEMA: list[tuple[str, str, tuple, str]] = [
         "project.environment",
         "list",
         (),
-        "project environment: JSON list of {name, version, note} — the software this "
-        "project actually runs; printed by `rh env show`, cited by Methods",
+        "project environment: JSON list of {name, version, note, state?} — the software this "
+        "project actually runs; printed by `rh env show`, cited by Methods (state defaults to confirmed)",
+    ),
+    (
+        "project.inputs",
+        "list",
+        (),
+        "inputs a result multiplies: JSON list of {name, value, note, state, who, when} — "
+        "state is confirmed|assumed, and confirmed needs who+when; an assumed input may not "
+        "appear in a claim until confirmed or waived (rule 16)",
     ),
     (
         "literature.ref_manager",
@@ -431,6 +443,38 @@ def validate(env: dict) -> list[str]:
                 problems.append(
                     f"project.environment[{i}] must be an object with a name — "
                     'e.g. {"name": "numpy", "version": "2.3.5", "note": "arrays"}'
+                )
+                continue
+            state = str(tool.get("state") or "confirmed").strip().lower()
+            if state not in INPUT_STATES:
+                problems.append(
+                    f"project.environment[{i}].state must be confirmed or assumed, got {state!r}"
+                )
+    inputs = env.get("project", {}).get("inputs", [])
+    if not isinstance(inputs, list):
+        problems.append(f"project.inputs must be a list, got {inputs!r}")
+    else:
+        for i, item in enumerate(inputs):
+            if not isinstance(item, dict) or not str(item.get("name", "")).strip():
+                problems.append(
+                    f"project.inputs[{i}] must be an object with a name — "
+                    'e.g. {"name": "laser power", "value": "12 mW", "state": "assumed"}'
+                )
+                continue
+            if not str(item.get("value", "")).strip():
+                problems.append(f"project.inputs[{i}] ({item['name']}) has no value")
+            state = str(item.get("state") or "").strip().lower()
+            if state not in INPUT_STATES:
+                problems.append(
+                    f"project.inputs[{i}] ({item['name']}).state must be confirmed or "
+                    f"assumed, got {state!r}"
+                )
+            elif state == "confirmed" and not (
+                str(item.get("who") or "").strip() and str(item.get("when") or "").strip()
+            ):
+                problems.append(
+                    f"project.inputs[{i}] ({item['name']}) is confirmed without who/when — "
+                    "name who confirmed it and when, or record it as assumed"
                 )
     name = env.get("project", {}).get("name", "")
     if name is not None and not isinstance(name, str):
@@ -710,6 +754,39 @@ def config_written(root: Path) -> bool:
         return False
 
 
+def assumed_inputs(env: dict) -> list[dict]:
+    """`project.inputs` entries still recorded as assumed (the ones that block a claim)."""
+    items = (env.get("project") or {}).get("inputs") or []
+    if not isinstance(items, list):
+        return []
+    return [
+        item
+        for item in items
+        if isinstance(item, dict) and str(item.get("state") or "").lower() == "assumed"
+    ]
+
+
+def input_warnings(root: Path, env: dict | None = None) -> list[str]:
+    """Advisory warnings for assumed inputs, unless rule 16 is waived in STATUS.md."""
+    env = env if env is not None else load_env(root)
+    assumed = assumed_inputs(env)
+    if not assumed:
+        return []
+    try:
+        status_text = paths.artifact_path(root, "STATUS.md").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        status_text = ""
+    if ASSUMED_RULE in statusmd.waivers(status_text):
+        return []
+    names = ", ".join(str(item.get("name") or "?") for item in assumed)
+    return [
+        f"assumed input(s) (rule {ASSUMED_RULE}): {names} — confirm each with who/when, or "
+        "waive rule 16 in STATUS.md; a claim may not rest on an assumed value"
+    ]
+
+
 def phase_gate(root: Path, env: dict | None = None) -> dict:
     """Hard-gate check per SKILL.md §3 — warns when the pipeline was skipped.
 
@@ -768,5 +845,7 @@ def phase_gate(root: Path, env: dict | None = None) -> dict:
         problems.append("phase 5 STATE artifact missing: STATUS.md")
     for i in range(6, 10):
         done[i] = current > i
+    # assumed inputs are advisory, never a gate: every project starts with them
+    problems.extend(input_warnings(root, env))
     # later phases may mark earlier ones done only via artifacts (already handled)
     return {"phase": current, "ok": not problems, "problems": problems, "done": done}

@@ -9,7 +9,10 @@ code drives `rh resume` (orchestrator, in this terminal) and `rh spawn <role>`.
 Placeholders understood in a command template:
 
   {role} {agent}    role name (aliases)
-  {prompt}          the full role prompt (one argv element, newlines intact)
+  {agent_name}      the unique agent name (`rh-<project>-<role>`, `-2` on collision) —
+                    use it for the pane/window name so a second agent of one role
+                    gets its own pane; `{role}` stays the bare role
+  {prompt}          the launch message (one line: read the brief and execute it)
   {prompt_file}     path of the prompt file written under `.rh/`
   {agent_file}      path of `.rh/agents/<role>.md` — use it in the CLI's
                     system-prompt-append area (e.g. pi: `--append-system-prompt
@@ -43,7 +46,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import config, paths
+from . import agentstate, config, paths
 from .add import slugify
 from .tasks import TaskStore, phase_name
 
@@ -60,6 +63,7 @@ _PLACEHOLDER = re.compile(r"(?<!\$)\{(\w+)\}")
 PLACEHOLDERS = (
     "role",
     "agent",
+    "agent_name",
     "prompt",
     "prompt_file",
     "agent_file",
@@ -110,6 +114,11 @@ def project_slug(env: dict) -> str:
     return slugify(str((env.get("project") or {}).get("name") or ""))
 
 
+def derive_name(root: Path, env: dict, role: str, suffix: str = "") -> str:
+    """The unique agent name: `rh-<project>-<role>`, then `-2`, `-3` … if taken."""
+    return agentstate.derive_name(root, env, role, suffix)
+
+
 def role_spec(env: dict, role: str) -> dict:
     """provider/model/thinking for `role` from `.rh/env.json`."""
     roles = (env.get("agents") or {}).get("roles") or {}
@@ -140,7 +149,8 @@ def find_template(env: dict, role: str) -> tuple[str, str]:
 
 
 def launch_plan(
-    root: Path, env: dict, role: str, prompt: str, prompt_file: Path
+    root: Path, env: dict, role: str, prompt: str, prompt_file: Path,
+    agent_name: str = "",
 ) -> dict:
     """Resolve the argv that starts `role`, using the command written in env.json.
 
@@ -167,6 +177,7 @@ def launch_plan(
     values = {
         "role": role,
         "agent": role,
+        "agent_name": agent_name or role,
         "prompt": prompt,
         "prompt_file": str(prompt_file),
         "agent_file": agent_file_path,
@@ -184,6 +195,7 @@ def launch_plan(
         "error": "",
         "source": source,
         "template": template,
+        "agent_name": agent_name or role,
         "prompt_file": str(prompt_file),
         "provider": spec["provider"],
         "model": spec["model"],
@@ -365,6 +377,7 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
         values = {
             "role": role,
             "agent": role,
+            "agent_name": plan.get("agent_name") or role,
             "root": str(root),
             "name": str((env.get("project") or {}).get("name") or ""),
             "project": project_slug(env),
@@ -375,6 +388,13 @@ def spawn_preview(root: Path, env: dict, role: str, plan: dict) -> dict:
             "skills": ",".join(plan.get("skills") or []),
             "command": shlex.join(plan["argv"]),
         }
+        if "{agent_name}" not in template and (
+            "{role}" in template or "{agent}" in template
+        ):
+            notes.append(
+                "pane name is not the unique agent name — use `{agent_name}` in "
+                "agents.spawn, or two agents of one role share a pane name"
+            )
         return {
             "mode": "pane",
             "command": substitute(template, values, notes),
@@ -431,6 +451,7 @@ def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
         )
         preview["returncode"] = proc.returncode
         _spawn_record(root, role, plan, None, "pane", preview.get("source", ""))
+        _state_record(root, role, plan, preview, None)
         return preview
     if preview["mode"] != "background":
         return preview
@@ -447,7 +468,33 @@ def _start(root: Path, role: str, plan: dict, preview: dict) -> dict:
         )
     preview["pid"] = proc.pid
     _spawn_record(root, role, plan, proc.pid, "background")
+    _state_record(root, role, plan, preview, proc.pid)
     return preview
+
+
+def _state_record(
+    root: Path, role: str, plan: dict, preview: dict, pid: int | None
+) -> None:
+    """Write `.rh/agents/<name>.json` — the file `rh agent status` reads.
+
+    A plain shell terminal is not an agent: it gets no state file. If the pane
+    command failed the record still lands, so a failed spawn is visible instead
+    of silently absent (close it with `rh agent done <name> --outcome closed`).
+    """
+    if role == "terminal":
+        return
+    name = str(plan.get("agent_name") or role)
+    agentstate.write_open(
+        root,
+        name=name,
+        role=role,
+        model=str(plan.get("model") or ""),
+        mode=str(preview.get("mode") or ""),
+        report=str(plan.get("report") or f"{paths.RH_DIR}/reports/{name}.md"),
+        brief=str(plan.get("brief") or ""),
+        source=str(preview.get("source") or plan.get("source") or ""),
+        pid=pid,
+    )
 
 
 def _spawn_record(
@@ -463,6 +510,7 @@ def _spawn_record(
     log_dir.mkdir(parents=True, exist_ok=True)
     rec = {
         "role": role,
+        "name": plan.get("agent_name", ""),
         "pid": pid,
         "mode": mode,
         "model": plan.get("model", ""),
@@ -475,22 +523,23 @@ def _spawn_record(
 
 
 def running_count(root: Path) -> int:
-    """Concurrent agents: spawn records whose recorded pid is still alive.
+    """Concurrent agents: open state files, plus legacy records with a live pid.
 
-    Pane spawns record no pid (the backend owns the process), so they are not
-    counted — the panes are visible to the user instead.
+    State files are the count now, because they are what `rh agent done` closes —
+    so pane spawns count too. Rows in `spawns.jsonl` written before state files
+    existed carry no name and are still counted by pid.
     """
+    alive = len(agentstate.open_records(root))
     f = paths.logs_dir(root) / "spawns.jsonl"
     if not f.exists():
-        return 0
-    alive = 0
+        return alive
     for line in f.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue  # a torn line at the tail of an append-only file
-        if rec.get("closed"):
-            continue
+        if rec.get("closed") or rec.get("name"):
+            continue  # named rows are state files; counting both double-counts
         pid = rec.get("pid")
         if pid:
             try:
@@ -540,7 +589,8 @@ def role_tasks(store: TaskStore, role: str, limit: int = 8) -> list[dict]:
 
 
 def build_role_prompt(
-    root: Path, env: dict, role: str, store: TaskStore, extra: str = ""
+    root: Path, env: dict, role: str, store: TaskStore, extra: str = "",
+    agent_name: str = "",
 ) -> str:
     """The prompt `rh spawn` hands to a role agent.
 
@@ -560,7 +610,8 @@ def build_role_prompt(
     spec = role_spec(env, role)
     skills = skills_for(env)
     project_name = (env.get("project") or {}).get("name") or "untitled"
-    pane_name = f"rh-{project_slug(env)}-{role}"
+    pane_name = agent_name or f"rh-{project_slug(env)}-{role}"
+    report_rel = f"{paths.RH_DIR}/reports/{pane_name}.md"
     current = store.current_phase()
     gate = config.phase_gate(root, env)
     model_line = (
@@ -637,9 +688,13 @@ def build_role_prompt(
         ]
     lines += [
         "",
-        "Report back with: what you changed (files), the evidence (command + number),",
-        "and what you need from the Orchestrator. Never update STATUS.md unless you are",
-        "the Orchestrator — that file is its own work (SKILL.md rule 9).",
+        f"Report: write your report to `{report_rel}` — what you changed, the",
+        "evidence (command + number), and what you need from the Orchestrator.",
+        f"Your last act is `rh agent done {pane_name}`. It refuses an empty report,",
+        "so write the file first; `--outcome blocked` asks for the Orchestrator,",
+        "and `--outcome closed` is only for the Orchestrator closing your pane.",
+        "Never update STATUS.md unless you are the Orchestrator — that file is its",
+        "own work (SKILL.md rule 9).",
     ]
     if extra:
         lines += [

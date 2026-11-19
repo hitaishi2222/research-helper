@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import __version__
 from . import agents as agents_mod
-from . import config, paths
+from . import config, paths, statusmd
 from .tasks import TaskStore, phase_exit, phase_name
 
 # Roles that get their own agent, per agents.count (SKILL.md §5).
@@ -83,7 +83,7 @@ def _due(ok: bool, needed_at: int, current: int) -> str:
 HISTORY_CAP = 10
 _HISTORY_START = re.compile(r"(?mi)^\s*(?:#{1,6}\s+history\b|history\s*:)")
 _HISTORY_ENTRY = re.compile(r"^\s{0,3}[-*]\s+\S")
-# The line `.rh/ENVIRONMENT.md` must carry: `rh 0.2.1` (a bullet or `v` is fine).
+# The line `.rh/ENVIRONMENT.md` must carry: `rh <version>` (a bullet or `v` is fine).
 _RH_VERSION = re.compile(r"(?mi)^\s*[-*]?\s*rh\s+v?(\d+\.\d+\.\d+)\b")
 
 
@@ -392,14 +392,10 @@ def build_checklist(root: Path, env: dict | None = None) -> dict:
     layout_text = _read("OUTPUT_LAYOUT.md")
 
     # `phase: **6 IMPLEMENT**` is as valid as `phase: 6 IMPLEMENT` — tolerate
-    # markdown emphasis, and say which of the three parts is missing.
-    header_parts = {
-        "phase": r"phase:\s*\**[\d]+",
-        "step": r"step:\s*\**\s*[^\s*|]+",
-        "updated": r"updated:\s*\**\s*\S",
-    }
-    header_missing = [n for n, rx in header_parts.items()
-                      if not (status_text and _re.search(rx, status_text, _re.IGNORECASE))]
+    # markdown emphasis, and say which of the three parts is missing. The parser
+    # is shared with `rh preflight`, so a header is never read two ways.
+    header = statusmd.parse_header(status_text)
+    header_missing = [n for n in ("phase", "step", "updated") if header[n] is None]
     items.append({
         "id": "content-status-header",
         "label": "STATUS.md has the `phase: | step: | updated:` header (what agents read for state)",

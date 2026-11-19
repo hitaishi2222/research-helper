@@ -102,6 +102,29 @@ def check(root: Path, env: dict | None = None) -> dict:
         role_ok = agents_mod.read_role(root, role) is not None
         add(f"role-file.{role}", role_ok,
             f".rh/agents/{role}.md" + ("" if role_ok else " missing — `rh agent write <role>`, then fill it in with the user"))
+
+    # completion contract: a spawned role must know where it reports and how it
+    # finishes. A warning, not a failure — old role files still work.
+    if role_completion := [
+        r for r in sorted(command_roles | configured_roles)
+        if r != "orchestrator" and agents_mod.read_role(root, r) is not None
+    ]:
+        missing = [
+            r for r in role_completion
+            if "rh agent done" not in (agents_mod.read_role(root, r) or "")
+        ]
+        c.append({
+            "id": "role-completion",
+            "ok": True,
+            "warn": bool(missing),
+            "detail": (
+                "every role file states the completion clause"
+                if not missing
+                else f"{', '.join(missing)} lack the completion clause (`.rh/reports/` + "
+                     "`rh agent done`) — `rh init --force` refreshes untouched scaffolds; "
+                     "edit a tailored file with the user"
+            ),
+        })
     if not configured:
         add("commands", False,
             "no agents.commands.<role> template set — rh resume/spawn have nothing to run; "

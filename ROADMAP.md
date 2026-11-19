@@ -164,6 +164,41 @@ Every item here removes a manual Orchestrator step. Ordered roughly by value.
 - [x] Concurrent budget enforcement from `agents.count` — track spawns in
       `.rh/logs/`; refuse the (count+1)th concurrent agent without `--force`.
 
+## v0.6 — Completion contract & reconciliation ✅
+
+Every item here came from `ISSUES.md`: an Orchestrator that could not tell a
+finished agent from a thinking one, a resumed session with three disagreeing
+descriptions of the state, and two rules that were virtues instead of commands.
+
+- [x] `rh spawn` writes `.rh/briefs/<agent-name>.md` and launches with one line
+      naming it, so a long prompt is never pasted by hand and submission is the
+      harness's job
+- [x] agent names are mechanically unique (`-2`, `-3` … on collision), and one
+      `{agent_name}` keys the brief, the report, the state file and the pane
+- [x] `rh agent done <name>` records completion only with a non-empty report;
+      `--outcome closed` is the rule-13 close
+- [x] `rh agent status` / `rh agent wait` read the state file — `open | done |
+      blocked | failed | closed` plus the report path — never a screen
+- [x] `agents.count` counts pane spawns, because open state files are the count
+- [x] role files carry the completion clause; `rh doctor` warns (without failing)
+      when a tailored file lacks it
+- [x] `rh preflight` reconciles board phase, `STATUS.md` header and artifacts,
+      applies artifacts > `STATUS.md` > board and logs, and never writes
+- [x] SKILL.md rule 9 states the precedence and makes a stale status file a
+      defect fixed at session start; phase 5 opens with `rh preflight`
+- [x] `rh verify [--strict]` pairs each manuscript claim with its `evidence:`
+      files and checks its numbers against them; the phase-8 gate names it
+- [x] `project.inputs` records confirmed vs assumed values (who/when for
+      confirmed); `rh env show` marks assumed ones, `rh status` warns, rule 16
+      keeps an assumed value out of a claim
+
+Still open from the same session:
+
+- [ ] `rh agent send <name> "<one line>"` behind an `agents.send` template, so the
+      Orchestrator stops hand-typing `send-keys` (and cannot forget the `Enter`)
+- [ ] `rh resume` surfaces done-but-unread reports in its first prompt, not only
+      through `rh preflight` and `rh agent status`
+
 ## v0.5 — Custom agents
 
 A role in `rh` is a file (`.rh/agents/<role>.md`) plus a launch command

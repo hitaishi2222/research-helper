@@ -9,6 +9,9 @@ Commands:
   rh search <query> [--max N]
   rh tasks [--phase N] [--state S] [--cancelled]   # the board (cancelled in one footer line)
   rh tasks set <id> {idle|working|complete|cancelled}
+  rh tasks info <id>      # one task or subtask in full (--json)
+  rh tasks rm <id> [--force]   # remove a task (+subtasks) or one subtask
+  rh tasks reorder <id> (--before|--after) <id>   # move a task inside its phase
   rh tasks phase [0-9]    # show the current phase + its exit gate, or set it (gated)
   rh status [--json]
   rh workflow [--tools|--example] [--png|--svg] [--no-render]
@@ -841,6 +844,92 @@ def cmd_task_set(args, root: Path):
     return 0
 
 
+def _warn_corrupt(store: tasks_mod.TaskStore) -> None:
+    """An empty table from an unreadable board must not look like an empty board."""
+    if store.corrupt:
+        print(
+            ui.colorize(
+                f"⚠ {store.file} is unreadable — the board shown is empty; "
+                "fix the file or restore a copy from .rh/.bak/",
+                ui.YELLOW,
+            ),
+            file=sys.stderr,
+        )
+
+
+@with_root
+def cmd_task_info(args, root: Path):
+    store = tasks_mod.TaskStore(root)
+    task = store.get(args.id)
+    _warn_corrupt(store)
+    if task is None:
+        print(
+            ui.colorize(f"✗ no task {args.id} — `rh tasks` lists the board", ui.RED),
+            file=sys.stderr,
+        )
+        return 1
+    if getattr(args, "json", False):
+        ui.json_out(task)
+        return 0
+    print(f"{ui.colorize(task['id'], ui.BOLD)}  {task['title']}")
+    if task.get("subtask"):
+        print(
+            f"  subtask of {task['parent']} · {ui.state_label(task['state'])}"
+        )
+        return 0
+    print(
+        f"  {tasks_mod.phase_name(task['phase'])} · owner {task.get('owner') or '—'} · "
+        f"{ui.state_label(task['state'])}"
+    )
+    for key in ("deliverable", "verify", "risk", "kind", "timebox"):
+        if task.get(key):
+            print(f"  {key.replace('_', ' ')}: {task[key]}")
+    if task.get("depends_on"):
+        print(f"  depends on: {', '.join(task['depends_on'])}")
+    print(
+        f"  created {task.get('created_at', '—')} · updated {task.get('updated_at', '—')}"
+    )
+    subtasks = task.get("subtasks") or []
+    if not subtasks:
+        print(ui.colorize("  no subtasks", ui.DIM))
+        return 0
+    print("  subtasks:")
+    for st in subtasks:
+        print(f"    {ui.state_label(st['state'])} {st['id']}  {st['title']}")
+    return 0
+
+
+@with_root
+def cmd_task_remove(args, root: Path):
+    store = tasks_mod.TaskStore(root)
+    try:
+        task = store.remove(args.id, force=getattr(args, "force", False))
+    except (KeyError, ValueError) as e:
+        print(ui.colorize(f"✗ {e}", ui.RED), file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        ui.json_out(task)
+        return 0
+    print(f"✓ removed {task['id']} — {task.get('title', '')}")
+    return 0
+
+
+@with_root
+def cmd_task_reorder(args, root: Path):
+    store = tasks_mod.TaskStore(root)
+    try:
+        task = store.reorder(args.id, before=args.before, after=args.after)
+    except (KeyError, ValueError) as e:
+        print(ui.colorize(f"✗ {e}", ui.RED), file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        ui.json_out(task)
+        return 0
+    where = f"before {args.before}" if args.before else f"after {args.after}"
+    print(f"✓ {task['id']} moved {where}")
+    return 0
+
+
 def group_tasks(tasks):
     """openspec-style grouping: Draft (no tasks) / Active / Complete."""
     draft = [
@@ -872,6 +961,7 @@ def cmd_tasks(args, root: Path):
     env = config.load_env(root)
     current = store.current_phase()
     summary = store.summary()
+    _warn_corrupt(store)
     # Cancelled work is decided, not pending: it stays out of the board unless
     # asked for, so the table only ever shows work that is still in play.
     shown_state = "cancelled" if getattr(args, "cancelled", False) else args.state
@@ -960,6 +1050,7 @@ def cmd_status(args, root: Path):
     env = config.load_env(root)
     store = tasks_mod.TaskStore(root)
     summary = store.summary()
+    _warn_corrupt(store)
     gate = config.phase_gate(root, env)
     if getattr(args, "json", False):
         ui.json_out(
@@ -2327,7 +2418,8 @@ def search(
 
 
 tasks_app = typer.Typer(
-    help="task board + progress; `rh tasks set <id> <state>`", no_args_is_help=False
+    help="task board + progress; `rh tasks set <id> <state>`, `info`, `rm`, `reorder`",
+    no_args_is_help=False,
 )
 app.add_typer(tasks_app, name="tasks")
 
@@ -2367,6 +2459,48 @@ def tasks_set(
     _pick(state, tasks_mod.TASK_STATES, "state")
     raise typer.Exit(
         cmd_task_set(_ns(ctx, root, as_json, id=task_id, state=state))
+    )
+
+
+@tasks_app.command("info", help="show one task or subtask in full")
+def tasks_info(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(metavar="ID")],
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(cmd_task_info(_ns(ctx, root, as_json, id=task_id)))
+
+
+@tasks_app.command("rm", help="remove a task (with its subtasks) or one subtask")
+def tasks_rm(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(metavar="ID")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="remove working work or a task others depend on"),
+    ] = False,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(
+        cmd_task_remove(_ns(ctx, root, as_json, id=task_id, force=force))
+    )
+
+
+@tasks_app.command("reorder", help="move a task before/after another in the same phase")
+def tasks_reorder(
+    ctx: typer.Context,
+    task_id: Annotated[str, typer.Argument(metavar="ID")],
+    before: Annotated[str | None, typer.Option("--before", metavar="ID")] = None,
+    after: Annotated[str | None, typer.Option("--after", metavar="ID")] = None,
+    root: RootOpt = None,
+    as_json: JsonOpt = False,
+):
+    raise typer.Exit(
+        cmd_task_reorder(
+            _ns(ctx, root, as_json, id=task_id, before=before, after=after)
+        )
     )
 
 

@@ -46,14 +46,43 @@ class TaskStore:
     def __init__(self, root: Path):
         self.root = root
         self.file = paths.tasks_json(root)
+        # Set by the permissive load when a bad file had to be discarded.
+        self.corrupt = False
 
-    def load(self) -> dict:
+    def load(self, *, strict: bool = False) -> dict:
+        """Read the board. `strict` refuses a bad file instead of guessing empty.
+
+        Writes use the strict path: a hand edit with a typo must never be saved
+        back as an empty board. Display keeps the permissive path and flags
+        `self.corrupt` so the caller can warn.
+        """
+        self.corrupt = False
+        empty = {"version": 1, "project_name": "", "current_phase": 0, "tasks": []}
         if not self.file.exists():
-            return {"version": 1, "project_name": "", "current_phase": 0, "tasks": []}
+            return empty
+        problem = ""
         try:
             data = json.loads(self.file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {"version": 1, "project_name": "", "current_phase": 0, "tasks": []}
+        except (OSError, ValueError) as exc:  # JSONDecodeError subclasses ValueError
+            problem, data = f"is not valid JSON ({exc})", None
+        if not isinstance(data, dict):
+            problem = problem or "is not a JSON object"
+        else:
+            tasks = data.get("tasks", [])
+            if not isinstance(tasks, list):
+                problem = "has a `tasks` value that is not a list"
+            elif any(not isinstance(t, dict) or not str(t.get("id") or "") for t in tasks):
+                problem = "has a task without an `id`"
+            elif len({t["id"] for t in tasks}) != len(tasks):
+                problem = "has two tasks with the same `id`"
+        if problem:
+            if strict:
+                raise ValueError(
+                    f"{self.file} {problem} — fix it or restore a copy from "
+                    ".rh/.bak/; nothing was written"
+                )
+            self.corrupt = True
+            return empty
         data.setdefault("tasks", [])
         if "project_slug" in data:  # renamed in 0.2
             data.setdefault("project_name", data.pop("project_slug"))
@@ -85,7 +114,7 @@ class TaskStore:
         timebox: str = "",
         subtasks: list[str] | None = None,
     ) -> dict:
-        data = self.load()
+        data = self.load(strict=True)
         task_id = task_id or f"T-{uuid.uuid4().hex[:6]}"
         if any(t["id"] == task_id for t in data["tasks"]):
             raise ValueError(f"task {task_id} already exists")
@@ -124,10 +153,78 @@ class TaskStore:
                     return {**st, "parent": t["id"], "subtask": True}
         return None
 
+    @staticmethod
+    def _refuse_removal(tasks, task_id, removed_ids, state, force) -> None:
+        if force:
+            return
+        if state == "working":
+            raise ValueError(f"{task_id} is working — finish it or pass --force")
+        dependents = [
+            t["id"]
+            for t in tasks
+            if t["id"] not in removed_ids
+            and removed_ids & set(t.get("depends_on") or [])
+        ]
+        if dependents:
+            raise ValueError(
+                f"{task_id} is a dependency of {', '.join(dependents)} — pass --force"
+            )
+
+    def remove(self, task_id: str, *, force: bool = False) -> dict:
+        """Drop a task (with its subtasks) or one subtask; ids are never renumbered."""
+        data = self.load(strict=True)
+        tasks = data["tasks"]
+        for t in tasks:
+            if t["id"] == task_id:
+                removed = {t["id"]} | {s["id"] for s in t.get("subtasks", [])}
+                self._refuse_removal(tasks, t["id"], removed, t.get("state"), force)
+                tasks.remove(t)
+                self.save(data)
+                return t
+            for st in t.get("subtasks", []):
+                if st["id"] == task_id:
+                    self._refuse_removal(tasks, task_id, {task_id}, st.get("state"), force)
+                    t["subtasks"].remove(st)
+                    self.save(data)
+                    return {**st, "parent": t["id"], "subtask": True}
+        raise KeyError(f"no task {task_id}")
+
+    def reorder(
+        self,
+        task_id: str,
+        *,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> dict:
+        """Move a task relative to another in the same phase; list order is display order."""
+        if bool(before) == bool(after):
+            raise ValueError("pass exactly one of --before or --after")
+        target_id = before or after
+        if target_id == task_id:
+            raise ValueError("cannot move a task relative to itself")
+        data = self.load(strict=True)
+        tasks = data["tasks"]
+        moving = next((t for t in tasks if t["id"] == task_id), None)
+        target = next((t for t in tasks if t["id"] == target_id), None)
+        if moving is None:
+            raise KeyError(f"no task {task_id}")
+        if target is None:
+            raise KeyError(f"no task {target_id}")
+        if moving["phase"] != target["phase"]:
+            raise ValueError(
+                f"{task_id} is in {phase_name(moving['phase'])}, {target_id} in "
+                f"{phase_name(target['phase'])} — a reorder stays inside one phase"
+            )
+        tasks.remove(moving)
+        pos = tasks.index(target)
+        tasks.insert(pos if before else pos + 1, moving)
+        self.save(data)
+        return moving
+
     def set_state(self, task_id: str, state: str) -> dict:
         if state not in TASK_STATES:
             raise ValueError(f"state must be one of {TASK_STATES}, got {state!r}")
-        data = self.load()
+        data = self.load(strict=True)
         for t in data["tasks"]:
             if t["id"] == task_id:
                 t["state"] = state
@@ -151,7 +248,7 @@ class TaskStore:
         return out
 
     def set_phase(self, phase: int) -> None:
-        data = self.load()
+        data = self.load(strict=True)
         data["current_phase"] = phase
         self.save(data)
 

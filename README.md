@@ -95,6 +95,9 @@ A tool on `PATH` does not mean this project should use it.
 | `rh add task "title" [--id S01] [--phase N] [--owner ROLE] [--state idle\|working\|complete\|cancelled] [--verify CMD] [--deliverable FILE] [--depends-on S01,S02] [--kind build\|spike]` | add a board task |
 | `rh search <query> [--max N]` | rg-first local search over `.rh/` + artifacts |
 | `rh tasks set <id> <idle\|working\|complete\|cancelled>` | change a task or subtask state (`cancelled` = plan killed by a later finding) |
+| `rh tasks info <id> [--json]` | one task or subtask in full: phase, owner, state, deliverable, verify, risk, timebox, dependencies, subtasks, timestamps |
+| `rh tasks rm <id> [--force]` | drop a task (with its subtasks) or one subtask; refuses `working` work and tasks others depend on unless `--force`; ids are never renumbered |
+| `rh tasks reorder <id> (--before \| --after) <id>` | move a task inside its phase; list order is display order. Hand-editing `.rh/tasks.json` for removal/reordering is allowed after user approval (valid JSON, ids and `current_phase` untouched) |
 | `rh tasks [--phase N] [--state S] [--cancelled]` | the board: every task + subtask, state, progress bars; cancelled tasks are counted in one footer line — `-c`/`--cancelled` shows them |
 | `rh tasks phase [0-9]` | show the current phase and its exit gate, or set the phase — **gated**; `--force` records a waiver |
 | `rh status` | header, phase rail, per-phase progress |
@@ -218,12 +221,17 @@ What the skill adds:
 ## Development
 
 ```bash
-uv venv
-uv pip install -e ".[dev]"
+uv sync --extra dev         # .venv with pytest, pyflakes and build
 uv run pytest -q
+uv run pyflakes src/rh tests
 uv build                     # sdist + wheel in dist/
 uv tool install dist/*.whl   # smoke-test the installed command
 ```
+
+`uv run` uses the project `.venv`. If the dev extra is not synced, `uv run pytest`
+falls back to a `pytest` on `PATH`, which can import an already-installed `rh`
+instead of this checkout — a green run that tested the wrong code. Sync first, and
+check `uv run python -c "import rh; print(rh.__file__)"` when in doubt.
 
 Layout:
 

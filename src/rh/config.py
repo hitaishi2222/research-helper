@@ -518,9 +518,15 @@ ENV_FENCE = re.compile(r"```jsonc?\n(.*?)```", re.DOTALL)
 
 
 def environment_notes(root: Path) -> str:
-    """The Orchestrator's phase-2 environment notes (`.rh/ENVIRONMENT.md`)."""
+    """The Orchestrator's phase-2 environment notes (`.rh/ENVIRONMENT.md`).
+
+    Read leniently: one odd byte must never take the checklist down, and an
+    unreadable record is treated as missing.
+    """
     try:
-        return paths.environment_md(root).read_text(encoding="utf-8").strip("\n")
+        return paths.environment_md(root).read_text(
+            encoding="utf-8", errors="replace"
+        ).strip("\n")
     except OSError:
         return ""
 

@@ -94,9 +94,12 @@ sections, template and the rules that apply, so no agent has to guess.
 
 The `rh` CLI (§10) keeps its machine state under `.rh/`: `env.json`, `ENVIRONMENT.md`,
 `CHECKLIST.md`, `tasks.json`, `agents/`, `logs/`, `notes/`, `workflow.mmd`, `HANDOFF.md`. The
-artifacts above remain the truth. `.rh/` is derived display state, with three exceptions: `rh env
-set` writes `env.json`, the Orchestrator writes `HANDOFF.md`, and `rh` never deletes a downloaded
-paper.
+artifacts above remain the truth. `.rh/` is derived display state, with four exceptions: `rh env
+set` writes `env.json`; the Orchestrator writes `HANDOFF.md`; `rh` never deletes a downloaded
+paper; and the Orchestrator may hand-edit `tasks.json` for **removal or reordering only**, when
+`rh tasks rm` / `rh tasks reorder` do not fit. Ask the user before that edit, keep the file valid
+JSON, remember that list order is display order, and never change a task id or `current_phase`
+(those have their own commands).
 
 ## 2. `.rh/env.json`, the config
 
@@ -602,6 +605,9 @@ Commands, by phase:
 | `rh add note\|literature\|gaps\|log <heading> -m "..."` | 3+ | appends under a heading, creating it if missing; literature takes a DOI |
 | `rh search <query>` | any | rg-based search over `.rh/` and the artifacts, no index |
 | `rh add task TITLE --id --deliverable --verify --subtask` | 4-6 | creates one board task with its subtasks |
+| `rh tasks info <id>` | any | one task or subtask in full: phase, owner, state, deliverable, verify, risk, timebox, dependencies, subtasks, timestamps (`--json`) |
+| `rh tasks rm <id> [--force]` | 4-6 | drop a task (with its subtasks) or one subtask; refuses `working` work and tasks others depend on unless `--force`; ids are never renumbered |
+| `rh tasks reorder <id> (--before\|--after) <id>` | 4-6 | move a task inside its phase; list order is display order |
 | `rh tasks set <id> idle\|working\|complete\|cancelled` | 5-6 | board state; subtask ids work too. `rh tasks` shows the board (cancelled work is counted in one footer line; `rh tasks -c` shows it) |
 | `rh tasks phase` / `rh tasks phase N` | any | shows the phase and its gate, or advances it gated; `--force` waives, so record it (rule 11) |
 | `rh resume` / `rh -r` | any | execs the Orchestrator here, per `agents.commands.orchestrator`; `--dry-run` prints the command |
@@ -613,6 +619,22 @@ Commands, by phase:
 | `rh handoff` / `rh handoff --clear` | any | show the next-session handoff the Orchestrator wrote, or empty it after reading (rule 14) |
 | `rh info [FILE.md]` | any | what an artifact is for: owner, phase, sections, template, rules |
 | `rh workflow` | 4+ | displays `.rh/workflow.mmd`; `--tools`, `--example` |
+
+### Upgrading `rh`
+
+`rh` never downloads, installs or upgrades itself (rule 6). Upgrading is three steps; the user does
+the first, you run the other two with them:
+
+1. the user upgrades the CLI (`uv tool upgrade rh-cli`, or whichever installer they used);
+2. `rh init --force` — archives copies of `.rh/env.json` and `.rh/tasks.json` to
+   `.rh/.bak/<timestamp>/` before touching them, regenerates `.rh/CHECKLIST.md` (your ticks are
+   kept), and refreshes role files that are still blank scaffolds. `.rh/ENVIRONMENT.md`, `logs/`,
+   `notes/`, `HANDOFF.md`, `PLAN.md` and role files you have tailored are not touched;
+3. `rh doctor`, then record the new `rh` version in `.rh/ENVIRONMENT.md` and re-read it (rule 10).
+   The checklist's `setup-rh-version` item stays pending until that record matches the running CLI.
+
+Ask the user before the `--force` run: it is the step that archives and rewrites config and board.
+No network, no installation, no automatic upgrade happens at any point.
 
 Contracts that keep the two layers consistent:
 

@@ -88,6 +88,11 @@ Rules carried into every session:
 - your checklist is `.rh/CHECKLIST.md` — read it first, then work it top to bottom:
   fill missing environment values by asking the user, wire the launch commands,
   and author `.rh/workflow.mmd` once the plan is approved;
+- in phase 2 record the user-named tools AND the `rh` version in `.rh/ENVIRONMENT.md`;
+  re-record it after an upgrade (SKILL.md §10) or the checklist keeps it pending;
+- the board is `rh tasks`; drop or reorder steps with `rh tasks rm` / `rh tasks reorder`.
+  Removal/reordering may also be hand-edited in `.rh/tasks.json` after user approval
+  (SKILL.md §1: valid JSON, list order is display order, ids and `current_phase` untouched);
 - ask the user for the purpose of this work in phase 1 (reference to reproduce,
   data check, Q1 submission, reproduction, …) and record it in PROBLEM.md first;
 - before spawning, name every pane/window `rh-<project>-<role>` (agents.spawn

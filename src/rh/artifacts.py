@@ -7,6 +7,8 @@ guessing, so this table mirrors SKILL.md §1/§3/§8 — keep them in sync.
 """
 from __future__ import annotations
 
+from . import __version__
+
 ARTIFACTS: dict[str, dict] = {
     "ENVIRONMENT.md": {
         "purpose": "The environment the user named in phase 2: runtimes, packages, "
@@ -20,6 +22,7 @@ ARTIFACTS: dict[str, dict] = {
             "dated amendments only (`- <date>: <change>`) — never re-type, never probe",
         ],
         "template": "## Environment\n\n"
+                    f"- rh {__version__} — the CLI that scaffolds this project\n"
                     "- meep 1.29.0 — FDTD, 2D/3D (user-confirmed)\n"
                     "- jax — not used; the user prefers numpy on this machine\n"
                     "- custom solver \"foo\" 2.0 — user-named, not on PATH\n",
@@ -27,6 +30,7 @@ ARTIFACTS: dict[str, dict] = {
             "Never invent a version or a tool: the user names them (SKILL.md §2).",
             "A binary on PATH does not mean this project should use it — ask, do not probe.",
             "Re-read this file at the start of every phase; never cache it (rule 10).",
+            "The first line names the `rh` version (`rh <version>`); after a CLI upgrade re-record it — the checklist flags a mismatch (SKILL.md §10).",
             "This is the only place versions are written; the manuscript links it.",
             "`rh env set KEY=VALUE` writes .rh/env.json — it never touches this file.",
         ],

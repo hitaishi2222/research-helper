@@ -2,7 +2,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from rh import agents, artifacts, checklist, cli, config, paths, spawn, tasks, workflow
+from rh import __version__
 
 
 def run(argv):
@@ -95,6 +98,13 @@ def test_orchestrator_role_carries_the_new_status_shape(tmp_path, capsys):
     assert "`waivers:`" in text
     assert "last ten" in text and ".rh/logs/" in text
     assert "waiver is recorded in STATUS.md by rule number" not in text
+
+
+def test_orchestrator_scaffold_names_board_edits_and_the_rh_version():
+    text = agents.default_content("orchestrator")
+    assert "rh tasks rm" in text and "rh tasks reorder" in text
+    assert ".rh/tasks.json" in text and "current_phase" in text
+    assert "`.rh/ENVIRONMENT.md`" in text and "`rh` version" in text
 
 
 def test_checklist_survives_a_non_utf8_status(tmp_path):
@@ -1394,3 +1404,272 @@ def test_help_and_version_exit_zero(capsys):
 def test_no_command_shows_help(capsys):
     assert run([]) == 2
     assert "usage: rh" in capsys.readouterr().out.lower()
+
+
+# --- board edits --------------------------------------------------------------
+
+
+def test_board_writes_refuse_a_corrupt_file(tmp_path):
+    """A hand edit with a typo must never be saved back as an empty board."""
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    board = root / ".rh" / "tasks.json"
+    board.write_text("{not json")
+    before = board.read_text()
+    store = tasks.TaskStore(root)
+    assert store.load()["tasks"] == [] and store.corrupt is True
+    for mutate in (
+        lambda: store.add("x", task_id="T-1"),
+        lambda: store.set_state("T-1", "working"),
+        lambda: store.set_phase(3),
+        lambda: store.remove("T-1"),
+        lambda: store.reorder("T-1", before="T-2"),
+    ):
+        with pytest.raises(ValueError):
+            mutate()
+        assert board.read_text() == before
+
+
+def test_board_strict_load_rejects_bad_shape(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    board = root / ".rh" / "tasks.json"
+    for bad in ('{"tasks": "nope"}', '{"tasks": [{"title": "no id"}]}',
+                '{"tasks": [{"id": "T-1"}, {"id": "T-1"}]}'):
+        board.write_text(bad)
+        with pytest.raises(ValueError):
+            tasks.TaskStore(root).load(strict=True)
+
+
+def test_remove_cascades_and_guards(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    store = tasks.TaskStore(root)
+    store.add("parent", task_id="P", subtasks=["a", "b"])
+    store.add("child", task_id="C")
+    store.add("dependent", task_id="D", depends_on=["P"])
+
+    # a dependency blocks removal until forced
+    with pytest.raises(ValueError):
+        store.remove("P")
+    assert {t["id"] for t in store.list()} == {"P", "C", "D"}
+    store.remove("P", force=True)
+    assert {t["id"] for t in store.list()} == {"C", "D"}  # subtasks went with it
+
+    # working work is refused, then removable on request
+    store.add("live", task_id="W", state="working")
+    with pytest.raises(ValueError):
+        store.remove("W")
+    store.remove("W", force=True)
+    assert store.get("W") is None
+
+    # a subtask removes alone; surviving ids are not renumbered
+    store.add("steps", task_id="S", subtasks=["one", "two"])
+    removed = store.remove("S.1")
+    assert removed["parent"] == "S" and removed["subtask"] is True
+    assert [s["id"] for s in store.get("S")["subtasks"]] == ["S.2"]
+    with pytest.raises(KeyError):
+        store.remove("nope")
+
+
+def test_reorder_is_relative_and_stays_in_phase(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    store = tasks.TaskStore(root)
+    for tid in ("A", "B", "C"):
+        store.add(tid, task_id=tid)
+    store.reorder("C", before="A")
+    assert [t["id"] for t in store.list()] == ["C", "A", "B"]
+    store.reorder("C", after="B")
+    assert [t["id"] for t in store.list()] == ["A", "B", "C"]
+
+    store.add("other phase", task_id="X", phase=5)
+    before = store.file.read_text()
+    for call in (
+        lambda: store.reorder("X", before="A"),  # cross-phase
+        lambda: store.reorder("A", before="A"),  # self
+        lambda: store.reorder("A"),  # neither
+        lambda: store.reorder("A", before="B", after="C"),  # both
+        lambda: store.reorder("A", before="nope"),  # unknown target
+    ):
+        with pytest.raises((ValueError, KeyError)):
+            call()
+        assert store.file.read_text() == before
+
+
+# --- board commands -----------------------------------------------------------
+
+
+def test_tasks_info_renders_every_field(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    assert run(
+        ["--root", root, "add", "task", "run the sim", "--id", "S01",
+         "--phase", "6", "--owner", "researcher", "--deliverable", "results/s01.csv",
+         "--verify", "pytest -q", "--depends-on", "S00", "--kind", "spike",
+         "--subtask", "write input", "--subtask", "run"]
+    ) == 0
+    capsys.readouterr()
+    assert run(["--root", root, "tasks", "info", "S01", "--json"]) == 0
+    data = payload(capsys.readouterr().out, "{")
+    assert data["id"] == "S01" and data["verify"] == "pytest -q"
+    assert data["depends_on"] == ["S00"] and len(data["subtasks"]) == 2
+    assert run(["--root", root, "tasks", "info", "S01.2", "--json"]) == 0
+    sub = payload(capsys.readouterr().out, "{")
+    assert sub["parent"] == "S01" and sub["subtask"] is True
+    assert run(["--root", root, "tasks", "info", "S01"]) == 0
+    out = capsys.readouterr().out
+    assert "deliverable" in out and "write input" in out
+    assert run(["--root", root, "tasks", "info", "NOPE"]) == 1
+    assert "NOPE" in capsys.readouterr().err
+
+
+def test_tasks_rm_and_reorder_commands(tmp_path, capsys):
+    root = str(tmp_path)
+    board_file = tmp_path / ".rh" / "tasks.json"
+    run(["--root", root, "init", "--non-interactive"])
+    for tid in ("A", "B", "C"):
+        run(["--root", root, "add", "task", tid, "--id", tid])
+    assert run(["--root", root, "tasks", "reorder", "C", "--before", "A"]) == 0
+    assert [t["id"] for t in json.loads(board_file.read_text())["tasks"]] == ["C", "A", "B"]
+
+    assert run(["--root", root, "tasks", "reorder", "C", "--before", "A", "--after", "B"]) == 1
+    run(["--root", root, "add", "task", "X", "--id", "X", "--phase", "5"])
+    before = board_file.read_text()
+    assert run(["--root", root, "tasks", "reorder", "X", "--before", "A"]) == 1
+    assert board_file.read_text() == before
+
+    run(["--root", root, "tasks", "set", "A", "working"])
+    assert run(["--root", root, "tasks", "rm", "A"]) == 1
+    assert run(["--root", root, "tasks", "rm", "A", "--force"]) == 0
+    assert run(["--root", root, "tasks", "rm", "C"]) == 0
+    assert [t["id"] for t in json.loads(board_file.read_text())["tasks"]] == ["B", "X"]
+
+
+def test_corrupt_board_warns_on_reads(tmp_path, capsys):
+    root = str(tmp_path)
+    run(["--root", root, "init", "--non-interactive"])
+    board = tmp_path / ".rh" / "tasks.json"
+    board.write_text("{bad")
+    capsys.readouterr()
+    assert run(["--root", root, "tasks"]) == 0
+    assert "tasks.json" in capsys.readouterr().err
+    assert run(["--root", root, "status"]) == 0
+    assert "tasks.json" in capsys.readouterr().err
+    assert run(["--root", root, "tasks", "rm", "A"]) == 1
+    assert "tasks.json" in capsys.readouterr().err
+
+
+# --- version record + checklist ticks -----------------------------------------
+
+
+def _line_with(path, needle):
+    return next(
+        line for line in path.read_text().splitlines() if needle in line
+    )
+
+
+def test_environment_notes_survive_a_non_utf8_file(tmp_path):
+    (tmp_path / ".rh").mkdir()
+    (tmp_path / ".rh" / "ENVIRONMENT.md").write_bytes(
+        b"## Environment\n\n- rh 0.2.1 \xff\n"
+    )
+    assert "rh 0.2.1" in config.environment_notes(tmp_path)
+
+
+def test_checklist_flags_a_stale_rh_version(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    notes = root / ".rh" / "ENVIRONMENT.md"
+
+    def item():
+        return {i["id"]: i for i in checklist.build_checklist(root)["items"]}[
+            "setup-rh-version"
+        ]
+
+    assert item()["status"] == "pending"
+    notes.write_text(f"## Environment\n\n- rh {__version__} — CLI\n")
+    assert item()["status"] == "ok" and item()["detail"] == ""
+    notes.write_text("## Environment\n\n- rh 0.0.1 — CLI\n")
+    stale = item()
+    assert stale["status"] == "pending"
+    assert "0.0.1" in stale["detail"] and __version__ in stale["detail"]
+
+
+def test_checklist_keeps_manual_ticks(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    path = root / ".rh" / "CHECKLIST.md"
+    target = _line_with(path, "<!-- setup-rh-version pending -->")
+    path.write_text(path.read_text().replace(target, target.replace("- [ ]", "- [x]", 1)))
+
+    checklist.write_checklist(root)
+
+    assert "- [x]" in _line_with(path, "<!-- setup-rh-version pending -->")
+    # untouched pending items stay open, and a vanished item's tick is dropped
+    assert "- [ ]" in _line_with(path, "<!-- setup-env-notes pending -->")
+    path.write_text(
+        path.read_text() + "\n- [x] Ghost item  (§9) <!-- ghost-item pending -->\n"
+    )
+    checklist.write_checklist(root)
+    assert "ghost-item" not in path.read_text()
+
+
+def test_checklist_generated_ticks_are_recomputed(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    path = root / ".rh" / "CHECKLIST.md"
+    assert "- [x]" in _line_with(path, "<!-- setup-config ok -->")
+
+    (root / ".rh" / "env.json").write_text("{bad")
+    checklist.write_checklist(root)
+
+    # an ok tick came from the generator, so a regression shows unticked again
+    assert "- [ ]" in _line_with(path, "<!-- setup-config pending -->")
+
+
+def test_checklist_label_fallback_for_old_files(tmp_path):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    item = {i["id"]: i for i in checklist.build_checklist(root)["items"]}[
+        "setup-rh-version"
+    ]
+    path = root / ".rh" / "CHECKLIST.md"
+    path.write_text(f"# old checklist\n\n- [x] {item['label']}  ({item['ref']})\n")
+
+    checklist.write_checklist(root)
+
+    assert "- [x]" in _line_with(path, "<!-- setup-rh-version pending -->")
+
+
+def test_init_force_upgrades_without_losing_project_state(tmp_path, capsys):
+    root = tmp_path
+    run(["--root", str(root), "init", "--non-interactive"])
+    store = tasks.TaskStore(root)
+    store.add("a", task_id="A")
+    store.add("b", task_id="B")
+
+    path = root / ".rh" / "CHECKLIST.md"
+    line = _line_with(path, "<!-- setup-rh-version pending -->")
+    path.write_text(path.read_text().replace(line, line.replace("- [ ]", "- [x]", 1)))
+
+    notes = root / ".rh" / "ENVIRONMENT.md"
+    notes_text = f"## Environment\n\n- rh {__version__} — CLI\n- custom 1.0\n"
+    notes.write_text(notes_text)
+    role = root / ".rh" / "agents" / "researcher.md"
+    tailored = role.read_text() + "\n- tailored: keep me\n"
+    role.write_text(tailored)
+    capsys.readouterr()
+
+    assert run(["--root", str(root), "init", "--non-interactive", "--force"]) == 0
+
+    assert notes.read_text() == notes_text
+    assert role.read_text() == tailored
+    assert "- [x]" in _line_with(path, "<!-- setup-rh-version ok -->")
+    board = json.loads((root / ".rh" / "tasks.json").read_text())
+    assert [t["id"] for t in board["tasks"]] == ["A", "B"]
+    assert list((root / ".rh" / ".bak").rglob("tasks.json"))
+    item = {i["id"]: i for i in checklist.build_checklist(root)["items"]}[
+        "setup-rh-version"
+    ]
+    assert item["status"] == "ok"

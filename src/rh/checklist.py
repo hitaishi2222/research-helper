@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import __version__
 from . import agents as agents_mod
 from . import config, paths
 from .tasks import TaskStore, phase_exit, phase_name
@@ -82,6 +83,8 @@ def _due(ok: bool, needed_at: int, current: int) -> str:
 HISTORY_CAP = 10
 _HISTORY_START = re.compile(r"(?mi)^\s*(?:#{1,6}\s+history\b|history\s*:)")
 _HISTORY_ENTRY = re.compile(r"^\s{0,3}[-*]\s+\S")
+# The line `.rh/ENVIRONMENT.md` must carry: `rh 0.2.1` (a bullet or `v` is fine).
+_RH_VERSION = re.compile(r"(?mi)^\s*[-*]?\s*rh\s+v?(\d+\.\d+\.\d+)\b")
 
 
 def _history_entries(status_text: str) -> int:
@@ -145,13 +148,29 @@ def _setup_items(root: Path, env: dict, current: int) -> list[dict]:
     })
 
     # 3. environment notes (phase 2)
-    has_notes = bool(config.environment_notes(root))
+    notes = config.environment_notes(root)
+    has_notes = bool(notes)
     items.append({
         "id": "setup-env-notes",
         "label": "Interview the user and write `.rh/ENVIRONMENT.md` (tools + versions)",
         "status": "ok" if has_notes else "pending",
         "ref": "§3 phase 2",
         "detail": "" if has_notes else "never probe: ask which runtimes/packages/versions this project uses, then record them",
+    })
+
+    # 3b. the `rh` version itself, so an older scaffold is visible
+    found = _RH_VERSION.search(notes)
+    recorded = found.group(1) if found else ""
+    items.append({
+        "id": "setup-rh-version",
+        "label": "`.rh/ENVIRONMENT.md` records the `rh` version (`rh <version>`) this project scaffolds with",
+        "status": "ok" if recorded == __version__ else "pending",
+        "ref": "§3 phase 2 §10",
+        "detail": "" if recorded == __version__ else (
+            f"recorded {('rh ' + recorded) if recorded else 'none'}, running rh {__version__} — "
+            "record the running version; upgrade path: `rh init --force` after the user upgrades "
+            "the CLI (SKILL.md §10)"
+        ),
     })
 
     # 4. launch commands for the roles this project will spawn
@@ -492,8 +511,14 @@ def _group_of(item_id: str) -> str:
     return "rule"
 
 
-def render_markdown(data: dict) -> str:
-    """Render the live checklist as `.rh/CHECKLIST.md`."""
+def render_markdown(data: dict, ticked: set[str] | None = None) -> str:
+    """Render the live checklist as `.rh/CHECKLIST.md`.
+
+    `ticked` carries the item ids a human ticked (and `label:` fallbacks from
+    files written before the ids existed); generated `ok` ticks are recomputed
+    from disk, so an item that regresses shows unticked again.
+    """
+    ticked = ticked or set()
     lines = [
         f"# Orchestrator checklist — {data['phase_name']}",
         "",
@@ -509,21 +534,51 @@ def render_markdown(data: dict) -> str:
             continue
         lines += [f"## {title}", ""]
         for item in items:
-            lines.append(f"- [{_MARK.get(item['status'], ' ')}] {item['label']}  ({item['ref']})")
+            kept = item["id"] in ticked or f"label:{item['label']}" in ticked
+            mark = "x" if kept else _MARK.get(item["status"], " ")
+            lines.append(
+                f"- [{mark}] {item['label']}  ({item['ref']}) "
+                f"<!-- {item['id']} {item['status']} -->"
+            )
             if item.get("detail"):
                 lines.append(f"      {item['detail']}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _ticked(path: Path) -> set[str]:
+    """Manual ticks in the existing checklist: item ids, or exact labels.
+
+    A tick on a line whose previous status was `ok` came from the generator, so
+    it is not preserved: the next run recomputes it from disk.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    out: set[str] = set()
+    for line in text.splitlines():
+        m = re.match(r"\s*-\s*\[[xX]\]\s*(.*)$", line)
+        if not m:
+            continue
+        marker = re.search(r"<!--\s*([a-z0-9-]+)\s+(\w+)\s*-->\s*$", m.group(1))
+        if marker:
+            if marker.group(2) != "ok":
+                out.add(marker.group(1))
+        else:
+            out.add("label:" + m.group(1).split("  (")[0].strip())
+    return out
+
+
 def write_checklist(root: Path, env: dict | None = None) -> tuple[Path, dict]:
     """Write `.rh/CHECKLIST.md` from live state; returns (path, checklist data).
 
     Called by `rh init`; the orchestrator reads the file itself (its system
-    prompt points at it), so there is no separate CLI command for it.
+    prompt points at it), so there is no separate CLI command for it. Manual
+    ticks survive: status is recomputed, the human's `[x]` is kept.
     """
     data = build_checklist(root, env)
     dest = paths.checklist_md(root)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(render_markdown(data), encoding="utf-8")
+    dest.write_text(render_markdown(data, _ticked(dest)), encoding="utf-8")
     return dest, data

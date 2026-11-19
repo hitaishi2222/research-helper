@@ -8,5 +8,5 @@ artifacts (PROBLEM.md, PLAN.md, ...) are kept at the root or inside .rh/ when
 the user asked for a clean workspace.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = ["__version__"]

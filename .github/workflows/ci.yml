@@ -19,4 +19,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev
       - run: uv run pytest -q
+      - run: uv run pyflakes src/rh tests
       - run: uv build

@@ -4,6 +4,40 @@ All notable changes to `rh` (distribution `rh-cli`). Format follows
 [Keep a Changelog](https://keepachangelog.com/1.1.0/); this project uses
 [semantic versioning](https://semver.org/).
 
+## [0.2.1] — 2026-11-19
+
+Board edits, single-task inspection, and an upgrade path that keeps the checklist.
+
+### Added
+
+- **`rh tasks info <id>`** — one task or subtask in full: phase, owner, state,
+  deliverable, verify, risk, kind, timebox, dependencies, subtasks and timestamps
+  (`--json`).
+- **`rh tasks rm <id> [--force]`** — drop a task (with its subtasks) or one subtask.
+  Refuses `working` work and tasks another task depends on unless `--force`;
+  surviving ids are never renumbered.
+- **`rh tasks reorder <id> (--before|--after) <id>`** — move a task inside its phase;
+  list order is display order.
+- **`.rh/ENVIRONMENT.md` records the `rh` version**, and the checklist's
+  `setup-rh-version` item flags a missing or stale record.
+- **Upgrade procedure** (SKILL.md §10): the user upgrades the CLI, then
+  `rh init --force`, then `rh doctor`. It archives copies of `env.json` and
+  `tasks.json`, keeps notes/logs/tailored role files, and keeps checklist ticks.
+
+### Changed
+
+- **Hand-editing `.rh/tasks.json` is sanctioned for removal and reordering**
+  (SKILL.md §1): user approval first, valid JSON, list order is display order, ids
+  and `current_phase` untouched.
+- **Board writes are strict.** An unparseable `tasks.json` makes `rh add task`,
+  `rh tasks set|phase|rm|reorder` fail with the file path and a `.rh/.bak/` hint
+  instead of silently starting from an empty board; reads still render, with a
+  warning naming the file.
+- **`rh init` keeps manual checklist ticks** and recomputes generated ones; item
+  ids travel in hidden `<!-- id status -->` markers, and files written before this
+  release fall back to matching the item label.
+- `rh info ENVIRONMENT.md` and the Orchestrator scaffold name the version record.
+
 ## [0.2.0] — 2026-11-18
 
 A smaller command surface: one command per concept, panes that know their backend,
